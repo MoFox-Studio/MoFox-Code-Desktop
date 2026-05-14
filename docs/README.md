@@ -37,6 +37,7 @@
 
 - [examples](./examples/)
 - [guides](./guides/)
+- [插件市场设计总览](./guides/plugin-market/README.md)
 
 ## 建议维护规则
 

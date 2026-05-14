@@ -61,3 +61,8 @@ omit = [
     "config/*",
     "**/__pycache__/*",
 ]
+
+[[tool.uv.index]]
+name = "tuna"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
