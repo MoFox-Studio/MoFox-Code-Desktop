@@ -199,6 +199,8 @@ class NapcatAdapter(BaseAdapter):
         """适配器卸载时的清理"""
         logger.info("Napcat 适配器正在关闭...")
 
+        self.meta_event_handler.stop_heartbeat_monitor()
+
         # 清理响应池
         for future in self._response_pool.values():
             if not future.done():

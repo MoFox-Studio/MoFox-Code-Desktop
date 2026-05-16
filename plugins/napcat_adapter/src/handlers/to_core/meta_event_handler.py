@@ -6,7 +6,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from src.app.plugin_system.api.log_api import get_logger
-from src.kernel.concurrency import get_task_manager
+from src.kernel.concurrency import TaskInfo, get_task_manager
 
 from ...event_models import MetaEventType
 
@@ -25,12 +25,27 @@ class MetaEventHandler:
         self.last_heart_beat = 0.0
         self.interval = 30.0
         self._interval_checking = False
-        self._heartbeat_task: Any | None = None
+        self._heartbeat_task: TaskInfo | None = None
         self._reconnecting = False
 
     def set_plugin_config(self, config: dict[str, Any]) -> None:
         """设置插件配置"""
         self.plugin_config = config
+
+    def stop_heartbeat_monitor(self) -> None:
+        """停止心跳监控并清理状态。"""
+        heartbeat_task = self._heartbeat_task
+        self._heartbeat_task = None
+        self._interval_checking = False
+        self.last_heart_beat = 0.0
+
+        if heartbeat_task is None or heartbeat_task.task is asyncio.current_task():
+            return
+
+        try:
+            get_task_manager().cancel_task(heartbeat_task.task_id)
+        except Exception:
+            logger.debug("取消 Napcat 心跳监控任务失败", exc_info=True)
 
     async def handle_meta_event(self, raw: dict[str, Any]):
         event_type = raw.get("meta_event_type")
@@ -38,6 +53,7 @@ class MetaEventHandler:
             sub_type = raw.get("sub_type")
             if sub_type == MetaEventType.Lifecycle.connect:
                 self_id = raw.get("self_id")
+                self.stop_heartbeat_monitor()
                 self.last_heart_beat = time.time()
                 logger.info(f"Bot {self_id} 连接成功")
                 # 不在连接时立即启动心跳检查，等第一个心跳包到达后再启动
