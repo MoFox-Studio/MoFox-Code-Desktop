@@ -386,7 +386,7 @@ class CoreConfig(ConfigBase):
         """云端遥测客户端配置节。"""
 
         client_enabled: bool = Field(
-            default=False,
+            default=True,
             description="是否启用云端遥测客户端发送能力",
             label="启用云端客户端",
             tag="network",
