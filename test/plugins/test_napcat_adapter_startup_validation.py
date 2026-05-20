@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 import src.kernel.storage as kernel_storage
+from src.kernel.concurrency import get_task_manager
 
 from plugins.napcat_adapter.config import NapcatAdapterConfig
 from plugins.napcat_adapter.plugin import NapcatAdapter, NapcatAdapterPlugin, _validate_bot_identity
@@ -261,7 +262,7 @@ async def test_send_napcat_api_times_out_when_websocket_send_blocks() -> None:
     )
     plugin = NapcatAdapterPlugin(config=config)
     adapter = NapcatAdapter(core_sink=cast(Any, _FakeCoreSink()), plugin=plugin)
-    adapter._ws = _HangingWebSocket()
+    adapter._ws = cast(Any, _HangingWebSocket())
 
     with pytest.raises(asyncio.TimeoutError):
         await adapter.send_napcat_api("send_group_msg", {"group_id": 1}, timeout=0.01)
@@ -403,3 +404,63 @@ async def test_meta_event_handler_reconnects_when_heartbeat_times_out(monkeypatc
 
     adapter.reconnect.assert_awaited_once()
     assert handler._interval_checking is False
+
+
+@pytest.mark.asyncio
+async def test_on_adapter_unloaded_stops_stale_heartbeat_monitor() -> None:
+    """适配器卸载时应停止残留的心跳监控任务。"""
+
+    config = NapcatAdapterConfig.from_dict(
+        {
+            "plugin": {"enabled": True, "config_version": "2.0.0"},
+            "bot": {"qq_id": "123456789", "qq_nickname": "MoFoxBot"},
+            "napcat_server": {
+                "mode": "reverse",
+                "host": "localhost",
+                "port": 8095,
+                "access_token": "",
+            },
+            "features": {
+                "group_list_type": "blacklist",
+                "group_list": [],
+                "private_list_type": "blacklist",
+                "private_list": [],
+                "ban_user_id": [],
+                "enable_poke": True,
+                "ignore_non_self_poke": False,
+                "poke_debounce_seconds": 2.0,
+                "enable_emoji_like": True,
+                "enable_reply_at": True,
+                "reply_at_rate": 0.5,
+                "enable_video_processing": True,
+                "video_max_size_mb": 100,
+                "video_download_timeout": 60,
+            },
+        }
+    )
+    plugin = NapcatAdapterPlugin(config=config)
+    adapter = NapcatAdapter(core_sink=cast(Any, _FakeCoreSink()), plugin=plugin)
+
+    handler = adapter.meta_event_handler
+    handler.last_heart_beat = 1.0
+    handler.interval = 60.0
+
+    heartbeat_task = get_task_manager().create_task(
+        asyncio.sleep(60),
+        name="test_napcat_adapter_heartbeat_check",
+        daemon=True,
+    )
+    handler._heartbeat_task = heartbeat_task
+    handler._interval_checking = True
+
+    await adapter.on_adapter_unloaded()
+
+    task = heartbeat_task.task
+    assert task is not None
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert handler._heartbeat_task is None
+    assert handler._interval_checking is False
+    assert handler.last_heart_beat == 0.0
