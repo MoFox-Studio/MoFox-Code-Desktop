@@ -141,12 +141,6 @@ def _close_tool_result_tail(response: Any) -> None:
     response.add_payload(LLMPayload(ROLE.ASSISTANT, Text(_SUSPEND_TEXT)))
 
 
-def _has_tool_result_tail(response: Any) -> bool:
-    """判断上下文尾部是否仍是未闭合的 TOOL_RESULT。"""
-    payloads = getattr(response, "payloads", None)
-    return bool(payloads and payloads[-1].role == ROLE.TOOL_RESULT)
-
-
 def _build_synthetic_trigger_message(
     chat_stream: Any,
     question: str,
@@ -408,12 +402,6 @@ class SubAgentCollaborationManager:
         normalized_question = question.strip()
         if not normalized_question:
             return False
-
-        # 子代理可能在上一轮连续工具 follow-up 中途被打断。
-        # 若当前上下文尾部仍是 TOOL_RESULT，必须先补一个 assistant 承接，
-        # 否则下一条 USER 会触发 strict 链路校验失败。
-        if _has_tool_result_tail(session.state):
-            _close_tool_result_tail(session.state)
 
         if visible:
             session.append_activity("user", normalized_question)

@@ -30,12 +30,13 @@ _AFTER_CHATTER_STEP_SCOPE = "actor_round"
 class _ToolCallWorkflowPhase(str, Enum):
     """default_chatter 的 toolcall 工作流相位（简化 FSM）。
 
-    约束目标：强制会话严格遵守
-    USER → ASSISTANT(tool_calls) → TOOL_RESULT → ASSISTANT(follow-up) → USER
+    约束目标：尽量维持清晰的工具链时序，同时允许标准兼容的
+    TOOL_RESULT → USER 插入。
 
-    - 仅在 WAIT_USER 阶段允许注入新的 USER payload
+    - 优先在 WAIT_USER 阶段注入新的 USER payload
+    - 若工具 follow-up 尚未发出但已有新未读，也允许在 FOLLOW_UP 阶段直接追加 USER
     - 仅在 MODEL_TURN/FOLLOW_UP 阶段允许向模型发起 send
-    - TOOL_EXEC 阶段只执行工具并写回 TOOL_RESULT，不发起新的 USER
+    - TOOL_EXEC 阶段只执行工具并写回 TOOL_RESULT，不直接发起新的 USER
     """
 
     WAIT_USER = "wait_user"
@@ -126,11 +127,11 @@ def _is_sub_agent_resume_event(event: WaitResumeEvent | None) -> bool:
 
 def _append_suspend_payload_if_tool_result_tail(
     *,
-    response: LLMResponseLike,
+    response: LLMConversationState,
     suspend_text: str,
     logger: Logger,
 ) -> None:
-    """在进入等待前用占位 assistant 闭合尾部 TOOL_RESULT。"""
+    """在继续注入新上下文前用占位 assistant 闭合尾部 TOOL_RESULT。"""
     payloads = getattr(response, "payloads", None)
     if not payloads or payloads[-1].role != ROLE.TOOL_RESULT:
         return
@@ -352,14 +353,56 @@ async def run_enhanced(
         resume_event = None
         _, unread_msgs = await chatter.fetch_unreads()
 
-        # 安全兜底：若上下文尾部为 TOOL_RESULT，必须进入 FOLLOW_UP
-        if rt.phase == _ToolCallWorkflowPhase.WAIT_USER and rt.has_tool_result_tail():
+        # 若上下文尾部为 TOOL_RESULT 且当前没有新 unread，则优先继续 follow-up。
+        if (
+            rt.phase == _ToolCallWorkflowPhase.WAIT_USER
+            and rt.has_tool_result_tail()
+            and not unread_msgs
+        ):
             _transition(
                 rt=rt,
                 to_phase=_ToolCallWorkflowPhase.FOLLOW_UP,
                 logger=logger,
-                reason="context tail is TOOL_RESULT; must follow-up before new USER",
+                reason="context tail is TOOL_RESULT and no unread is pending",
             )
+
+        if rt.phase == _ToolCallWorkflowPhase.FOLLOW_UP and unread_msgs:
+            unread_lines = "\n".join(
+                chatter.format_message_line(msg) for msg in unread_msgs
+            )
+            decision = await chatter.sub_agent(
+                unread_lines,
+                unread_msgs,
+                chat_stream,
+            )
+            logger.info(
+                f"Sub-agent 决策: {decision['reason']} (响应: {decision['should_respond']})"
+            )
+
+            if decision["should_respond"]:
+                unread_user_prompt = await chatter._build_user_prompt(
+                    chat_stream,
+                    history_text=history_text if not rt.history_merged else "",
+                    unread_lines=unread_lines,
+                    extra=chatter._build_negative_behaviors_extra(),
+                )
+                rt.history_merged = True
+                rt.unreads = unread_msgs
+                chatter._upsert_pending_unread_payload(
+                    response=rt.response,
+                    formatted_text=unread_user_prompt,
+                    unread_msgs=unread_msgs,
+                    native_multimodal=native_multimodal,
+                    logger_override=logger,
+                )
+                rt.unread_msgs_to_flush = unread_msgs
+                _transition(
+                    rt=rt,
+                    to_phase=_ToolCallWorkflowPhase.MODEL_TURN,
+                    logger=logger,
+                    reason="accepted unread batch during tool follow-up",
+                )
+                continue
 
         # FSM 驱动：每次循环只推进一个相位（或 yield）
         if rt.phase == _ToolCallWorkflowPhase.WAIT_USER:

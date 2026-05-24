@@ -462,8 +462,8 @@ def test_context_manager_raises_when_tool_chain_is_broken_by_new_user() -> None:
         manager.add_payload(payloads, LLMPayload(ROLE.USER, Text("继续")))
 
 
-def test_context_manager_raises_when_user_follows_tool_result_without_assistant() -> None:
-    """strict 模式下：TOOL_RESULT 后必须由 ASSISTANT 承接；否则直接报错。"""
+def test_context_manager_allows_user_after_tool_result() -> None:
+    """标准兼容模式下：TOOL_RESULT 后允许直接进入下一条 USER。"""
     manager = LLMContextManager()
     payloads = [LLMPayload(ROLE.USER, Text("先调用工具"))]
 
@@ -486,5 +486,11 @@ def test_context_manager_raises_when_user_follows_tool_result_without_assistant(
         ),
     )
 
-    with pytest.raises(LLMContextError):
-        manager.add_payload(payloads, LLMPayload(ROLE.USER, Text("继续")))
+    payloads = manager.add_payload(payloads, LLMPayload(ROLE.USER, Text("继续")))
+
+    assert [payload.role for payload in payloads] == [
+        ROLE.USER,
+        ROLE.ASSISTANT,
+        ROLE.TOOL_RESULT,
+        ROLE.USER,
+    ]

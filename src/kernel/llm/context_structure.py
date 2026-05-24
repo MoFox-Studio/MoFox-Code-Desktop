@@ -103,11 +103,8 @@ def validate_payload_sequence(
                     return
                 err(f"tool_result 未覆盖全部 tool_call: missing={sorted(missing)}")
 
-            if j < len(convo) and convo[j].role == ROLE.USER:
-                err("tool_result 后不能直接跟 user（缺少 assistant 承接）")
-
-            if j < len(convo) and convo[j].role != ROLE.ASSISTANT:
-                err("tool_result 后只能是 assistant 或结束")
+            if j < len(convo) and convo[j].role not in {ROLE.ASSISTANT, ROLE.USER}:
+                err("tool_result 后只能是 assistant、user 或结束")
 
             idx = j
             continue

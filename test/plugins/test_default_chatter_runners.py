@@ -1,8 +1,8 @@
 """default_chatter.runners 模块测试。
 
-聚焦 enhanced 模式在 strict 校验下的真实运行场景：
-当上下文以 TOOL_RESULT 结尾时（工具链未闭合），即使收到新未读消息，
-也必须优先完成工具续轮，避免出现 tool_result -> user 的非法序列。
+聚焦 enhanced 模式在工具续轮与新消息交错时的真实运行场景：
+当上下文以 TOOL_RESULT 结尾时，允许把新 USER 直接接在后面一起发给 LLM，
+而不是强制先补一轮 assistant follow-up。
 """
 
 from __future__ import annotations
@@ -176,7 +176,7 @@ class _FakeChatter:
     @staticmethod
     def _upsert_pending_unread_payload(*_args: Any, **_kwargs: Any) -> None:
         raise AssertionError(
-            "当 payload 尾部为 TOOL_RESULT 时，不应注入 USER（应先续轮闭合工具链）"
+            "这个测试分支不应注入 USER"
         )
 
     async def flush_unreads(self, _unread_messages: list[Any]) -> int:
@@ -361,27 +361,42 @@ def test_upsert_pending_unread_payload_keeps_fixed_reminder_on_first_user_only()
 
 
 @pytest.mark.asyncio
-async def test_run_enhanced_prioritizes_tool_followup_when_tool_result_tail() -> None:
-    """当上下文尾部是 TOOL_RESULT 时，应优先续轮，不注入 USER。
+async def test_run_enhanced_merges_unread_during_tool_followup() -> None:
+    """当工具 follow-up 尚未发出时，新未读应被实时并入下一次模型请求。"""
 
-    该测试模拟：上一轮工具调用完成并写回 TOOL_RESULT，但尚未发送 follow-up
-    承接工具结果；此时又来了新未读消息。
+    class _CaptureFollowupChatter(_FakeChatterWithUnreadSequence):
+        def __init__(self, response: _FakeResponse, unread_batches: list[list[Any]]) -> None:
+            super().__init__(response, unread_batches)
+            self.upsert_texts: list[str] = []
+            self.flushed_batches: list[list[Any]] = []
 
-    期望：runner 不会调用 _upsert_pending_unread_payload，且不会 flush 新未读，
-    而是直接发送一次 follow-up 并结束（由 FakeResponse 行为触发 Stop）。
-    """
+        def _upsert_pending_unread_payload(
+            self,
+            response: Any,
+            formatted_text: str,
+            unread_msgs: list[Any] | None = None,
+            native_multimodal: bool = False,
+            logger_override: Any = None,
+        ) -> None:
+            _ = (unread_msgs, native_multimodal, logger_override)
+            self.upsert_texts.append(formatted_text)
+            response.add_payload(
+                SimpleNamespace(role=ROLE.USER, content=[Text(formatted_text)])
+            )
 
+        async def flush_unreads(self, unread_messages: list[Any]) -> int:
+            self.flushed_batches.append(list(unread_messages))
+            return len(unread_messages)
+
+    unread_msg = SimpleNamespace(message_id="m1")
     fake_response = _FakeResponse(
         payload_roles=[ROLE.USER, ROLE.ASSISTANT, ROLE.TOOL_RESULT],
         message="finish",
     )
-    chatter = _FakeChatter(fake_response)
+    chatter = _CaptureFollowupChatter(fake_response, unread_batches=[[unread_msg]])
 
     chat_stream = cast(Any, SimpleNamespace(stream_id="s1", stream_name="测试流"))
-    fake_logger = cast(
-        Any,
-        _FakeLogger(),
-    )
+    fake_logger = cast(Any, _FakeLogger())
 
     gen = run_enhanced(
         chatter=cast(Any, chatter),
@@ -395,6 +410,12 @@ async def test_run_enhanced_prioritizes_tool_followup_when_tool_result_tail() ->
     result = await anext(gen)
     assert isinstance(result, Stop)
     assert chatter.create_request_calls == [("actor", "actor")]
+    assert chatter.upsert_texts == ["user"]
+    assert chatter.flushed_batches == [[unread_msg]]
+    assert [str(payload.role) for payload in fake_response.payloads[-2:]] == [
+        str(ROLE.TOOL_RESULT),
+        str(ROLE.USER),
+    ]
     assert fake_logger.panels == []
 
 
