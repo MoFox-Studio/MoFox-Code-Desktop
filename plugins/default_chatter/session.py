@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncGenerator, TypeGuard, cast
+from typing import Any, AsyncGenerator, TypeGuard
 
 from src.core.components.base import Failure, Stop, Wait, WaitResumeEvent
 from src.core.models.message import Message
@@ -555,8 +555,47 @@ class DefaultChatterSession:
                         self.logger.warning(
                             f"LLM 返回纯文本而不是工具调用: {llm_response.message[:100]}"
                         )
-                        stop_result = Stop(0, step_data=_consume_actor_round_step_data(state))
-                        yield self._apply_stop_wake_config(stop_result) if apply_stop_wake_config else stop_result
+                        plain_text_adapter = self.adapters.plain_text_adapter
+                        if plain_text_adapter is not None:
+                            handling = plain_text_adapter.handle_plain_text_response(
+                                message=llm_response.message,
+                                retry_count=state.plain_text_retry_count,
+                                response=llm_response,
+                            )
+                            action = handling["action"]
+                            reminder_text = handling.get("reminder_text", "")
+                            if action == "retry" and reminder_text.strip():
+                                state.plain_text_retry_count += 1
+                                llm_response.add_payload(
+                                    LLMPayload(ROLE.USER, Text(reminder_text))
+                                )
+                                _transition(
+                                    state=state,
+                                    to_phase=DefaultChatterSessionPhase.MODEL_TURN,
+                                    session=self,
+                                    reason="plain text retry",
+                                )
+                                continue
+                            if action == "wait":
+                                resume_event = yield Wait(
+                                    step_data=_consume_actor_round_step_data(state)
+                                )
+                                _transition(
+                                    state=state,
+                                    to_phase=DefaultChatterSessionPhase.WAIT_USER,
+                                    session=self,
+                                    reason="plain text fallback wait",
+                                )
+                                continue
+                        stop_result = Stop(
+                            0,
+                            step_data=_consume_actor_round_step_data(state),
+                        )
+                        yield (
+                            self._apply_stop_wake_config(stop_result)
+                            if apply_stop_wake_config
+                            else stop_result
+                        )
                         return
                     resume_event = yield Wait(
                         step_data=_consume_actor_round_step_data(state)

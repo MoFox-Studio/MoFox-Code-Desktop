@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from dataclasses import dataclass, field
-from typing import Any, Protocol, TypedDict, TypeAlias
+from typing import Any, Literal, Protocol, TypedDict, TypeAlias
 
 from src.core.components.base import Failure, Stop, Success, Wait, WaitResumeEvent
 from src.core.models.message import Message
@@ -174,6 +174,26 @@ class LoggerAdapter(Protocol):
         ...
 
 
+class PlainTextResponseHandling(TypedDict):
+    """模型错误输出纯文本时的补救策略。"""
+
+    action: Literal["retry", "wait", "stop"]
+    reminder_text: str
+
+
+class PlainTextResponseAdapter(Protocol):
+    """纯文本输出补救钩子。"""
+
+    def handle_plain_text_response(
+        self,
+        *,
+        message: str,
+        retry_count: int,
+        response: LLMResponseLike,
+    ) -> PlainTextResponseHandling:
+        ...
+
+
 @dataclass(slots=True)
 class DefaultChatterSessionAdapters:
     """可重用聊天核心公开的显式接口。"""
@@ -185,6 +205,7 @@ class DefaultChatterSessionAdapters:
     tool_execution_adapter: ToolExecutionAdapter
     sub_agent_adapter: SubAgentAdapter
     logger_adapter: LoggerAdapter
+    plain_text_adapter: PlainTextResponseAdapter | None = None
 
 @dataclass(slots=True)
 class DefaultChatterSessionOptions:

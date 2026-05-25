@@ -220,6 +220,9 @@ def _build_session(
             tool_execution_adapter=runtime,
             sub_agent_adapter=runtime,
             logger_adapter=fake_logger,
+            plain_text_adapter=(
+                runtime if hasattr(runtime, "handle_plain_text_response") else None
+            ),
         ),
     )
 
@@ -547,6 +550,51 @@ async def test_session_execute_with_stream_action_only_follows_up_when_suspend_d
     first = await anext(session.execute_with_stream(chat_stream, apply_stop_wake_config=False))
     assert isinstance(first, Stop)
     assert response.send_count == 2
+
+
+@pytest.mark.asyncio
+async def test_session_execute_with_stream_retries_plain_text_with_adapter_hook() -> None:
+    response = _FakeResponse(payload_roles=[ROLE.USER], message="spoken text")
+
+    async def _send(*, stream: bool = False) -> _FakeResponse:
+        _ = stream
+        response.send_count += 1
+        if response.send_count == 1:
+            response.call_list = []
+            response.message = "spoken text"
+        else:
+            response.call_list = [SimpleNamespace(name="action-pass_and_wait", args={}, id="1")]
+            response.message = ""
+        return response
+
+    response.send = _send  # type: ignore[method-assign]
+
+    class _RetryRuntime(_FakeRuntimeAllowUser):
+        def handle_plain_text_response(
+            self,
+            *,
+            message: str,
+            retry_count: int,
+            response: Any,
+        ) -> dict[str, str]:
+            _ = message, response
+            if retry_count == 0:
+                return {"action": "retry", "reminder_text": "use tools"}
+            return {"action": "wait", "reminder_text": ""}
+
+    runtime = _RetryRuntime(response)
+    session = _build_session(runtime)
+    chat_stream = _make_chat_stream()
+
+    first = await anext(session.execute_with_stream(chat_stream, apply_stop_wake_config=False))
+    assert isinstance(first, Wait)
+    assert response.send_count == 2
+    assert any(str(payload.role) == str(ROLE.TOOL_RESULT) for payload in response.payloads)
+    assert any(
+        str(payload.role) == str(ROLE.USER)
+        and any(getattr(part, "text", None) == "use tools" for part in (payload.content or []))
+        for payload in response.payloads
+    )
 
 
 @pytest.mark.asyncio

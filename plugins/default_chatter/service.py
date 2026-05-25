@@ -104,4 +104,9 @@ class DefaultChatterService(BaseService):
             tool_execution_adapter=runtime,
             sub_agent_adapter=runtime,
             logger_adapter=logger,
+            plain_text_adapter=(
+                runtime
+                if hasattr(runtime, "handle_plain_text_response")
+                else None
+            ),
         )
