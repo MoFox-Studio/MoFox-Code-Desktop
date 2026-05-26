@@ -37,9 +37,9 @@ class StreamEvent:
 
 | 场景 | 使用字段 |
 |---|---|
-| 文本增量 | 	ext_delta |
-| 工具调用开始 | 	ool_call_id + 	ool_name |
-| 工具参数增量 | 	ool_args_delta |
+| 文本增量 | text_delta |
+| 工具调用开始 | tool_call_id + tool_name |
+| 工具参数增量 | tool_args_delta |
 | 推理/thinking | reasoning_delta / reasoning_block_type |
 | thinking 签名 | reasoning_signature_delta |
 
