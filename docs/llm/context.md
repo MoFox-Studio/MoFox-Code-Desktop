@@ -5,7 +5,7 @@
 context.py 提供 LLMContextManager，负责 LLM 对话上下文的管理，包括 payload 写入接管、结构校验、reminder 注入和基于 token/payloads 数量的裁剪。
 
 默认职责：
-1. 接管 payload 列表写入（dd_payload/system/tool）
+1. 接管 payload 列表写入（add_payload/system/tool）
 2. 接管 reminder 的延迟登记
 3. 写入后执行结构校验（strict，不做自动修复）
 4. 最后按 max_payloads/token budget 执行裁剪
