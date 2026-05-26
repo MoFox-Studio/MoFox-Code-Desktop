@@ -15,8 +15,10 @@ from src.kernel.llm import (
     LLMRequest,
     LLMUsable,
     ModelSet,
+    ReminderSourceSpec,
     RerankRequest,
     ToolRegistry,
+    get_llm_stats_collector,
 )
 from src.core.config import get_model_config
 from src.core.utils.llm_tool_call import (
@@ -31,6 +33,12 @@ __all__ = [
     "get_model_set_by_task",
     "get_model_set_by_name",
     "create_tool_registry",
+    "get_llm_stats_summary",
+    "get_llm_stats_by_model",
+    "get_llm_stats_by_request_name",
+    "get_llm_stats_by_stream",
+    "get_llm_cache_hit_rate",
+    "get_recent_llm_requests",
     "exec_llm_usable",
     "run_tool_call",
 ]
@@ -56,22 +64,27 @@ def create_llm_request(
     Returns:
         LLMRequest 实例
     """
+    if context_manager is not None and with_reminder is not None:
+        raise ValueError(
+            "with_reminder 不能与自定义 context_manager 同时使用；"
+            "请在构造 context_manager 时直接配置 ReminderSourceSpec"
+        )
+
+    if context_manager is None and with_reminder is not None:
+        context_manager = LLMContextManager(
+            reminder_sources=[
+                ReminderSourceSpec(
+                    bucket=str(with_reminder),
+                    wrap_with_system_tag=True,
+                )
+            ]
+        )
+
     request = LLMRequest(
         model_set=model_set,
         request_name=request_name,
         context_manager=context_manager,
     )
-
-    if with_reminder is not None and request.context_manager is not None:
-        from src.core.prompt import get_system_reminder_store
-
-        reminder_items = get_system_reminder_store().get_items(with_reminder)
-        for reminder_item in reminder_items:
-            request.context_manager.reminder(
-                reminder_item.render(),
-                insert_type=reminder_item.insert_type,
-                wrap_with_system_tag=True,
-            )
 
     return request
 
@@ -188,3 +201,33 @@ def create_tool_registry(tools: list[type[LLMUsable]] | None = None) -> ToolRegi
         for tool in tools:
             registry.register(tool)
     return registry
+
+
+async def get_llm_stats_summary() -> dict[str, Any]:
+    """获取 LLM 统计摘要。"""
+    return await get_llm_stats_collector().get_summary()
+
+
+async def get_llm_stats_by_model() -> list[dict[str, Any]]:
+    """获取按模型分组的 LLM 统计。"""
+    return await get_llm_stats_collector().get_by_model()
+
+
+async def get_llm_stats_by_request_name() -> list[dict[str, Any]]:
+    """获取按 request_name 分组的 LLM 统计。"""
+    return await get_llm_stats_collector().get_by_request_name()
+
+
+async def get_llm_stats_by_stream() -> list[dict[str, Any]]:
+    """获取按聊天流分组的 LLM 统计。"""
+    return await get_llm_stats_collector().get_by_stream()
+
+
+async def get_llm_cache_hit_rate(stream_id: str | None = None) -> dict[str, Any]:
+    """获取全局或指定聊天流的缓存命中率。"""
+    return await get_llm_stats_collector().get_cache_hit_rate(stream_id=stream_id)
+
+
+async def get_recent_llm_requests(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+    """获取近期 LLM 请求统计明细。"""
+    return await get_llm_stats_collector().get_recent(limit=limit, offset=offset)

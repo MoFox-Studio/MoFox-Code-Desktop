@@ -7,7 +7,11 @@ OpenAI 模型客户端实现。
 
 from __future__ import annotations
 
-import base64
+# 这个模块把内部 payload 模型适配到 OpenAI 兼容的 chat、embedding 和 rerank
+# 接口上。timeout、schema 和请求观测等共享逻辑直接来自 ``model_client.shared``，
+# 这样当前文件可以更聚焦在 provider 特有的 payload 映射和 SDK 行为上。
+
+import pybase64 as base64
 import inspect
 import json
 import threading
@@ -25,66 +29,13 @@ from ..payload import Image, LLMPayload, ReasoningText, Text, ToolCall, ToolResu
 from ..roles import ROLE
 from ..token_counter import count_payload_tokens
 from .base import StreamEvent
-
-
-def _log_openai_request_body(
-    api_name: str,
-    params: dict[str, Any],
-    *,
-    model_set: dict[str, Any] | None = None,
-    payloads: list[LLMPayload] | None = None,
-    request_name: str | None = None,
-) -> None:
-    """将 OpenAI 请求体送入请求检视器，便于在 WebUI 中核查 payload 结构。"""
-    metadata: dict[str, Any] = {}
-    if isinstance(model_set, dict):
-        provider = model_set.get("api_provider") or model_set.get("client_type") or model_set.get("base_url")
-        if provider is not None:
-            metadata["api_provider"] = str(provider)
-    if request_name:
-        metadata["request_name"] = request_name
-    if payloads:
-        try:
-            metadata["estimated_input_tokens"] = count_payload_tokens(
-                payloads,
-                model_identifier=str(params.get("model") or "cl100k_base"),
-            )
-        except Exception:
-            pass
-    try:
-        from src.kernel.llm.request_inspector import capture
-        capture(api_name, params, metadata)
-    except Exception:
-        pass
-
-
-def _build_httpx_timeout(timeout: float | None) -> Any:
-    """根据总超时时间构造 httpx.Timeout 实例。
-
-    Args:
-        timeout: 总超时秒数，非正数或非数值时返回 None。
-
-    Returns:
-        httpx.Timeout 实例，或 None（不限超时）。
-    """
-    import httpx
-
-    if not isinstance(timeout, (int, float)):
-        return None
-
-    total = float(timeout)
-    if total <= 0:
-        return None
-
-    connect_timeout = min(total, 10.0)
-    pool_timeout = min(total, 5.0)
-    return httpx.Timeout(
-        timeout=total,
-        connect=connect_timeout,
-        read=total,
-        write=total,
-        pool=pool_timeout,
-    )
+from .shared import (
+    build_httpx_timeout,
+    callable_accepts_reason,
+    extract_model_transport_params,
+    log_provider_request_body,
+    normalize_schema_for_grammar,
+)
 
 
 def _is_data_url(value: str) -> bool:
@@ -166,10 +117,12 @@ def _to_openai_tool(tool: Any) -> dict[str, Any]:
     func = result.get("function", {})
     params = func.get("parameters", {})
     if isinstance(params, dict):
-        _normalize_schema_for_grammar(params)
+        # 面向 provider 的 schema 清理统一放在 shared helper 中，避免不同
+        # 适配器在工具 schema 的序列化上逐渐不一致。
+        normalize_schema_for_grammar(params)
     props = params.get("properties", {})
     schema_has_reason = isinstance(props, dict) and "reason" in props
-    execute_has_reason = _callable_accepts_reason(getattr(tool, "execute", None))
+    execute_has_reason = callable_accepts_reason(getattr(tool, "execute", None))
     if not schema_has_reason and not execute_has_reason:
         props["reason"] = {
             "type": "string",
@@ -184,70 +137,6 @@ def _to_openai_tool(tool: Any) -> dict[str, Any]:
         result["function"] = func
 
     return result
-
-
-def _callable_accepts_reason(callable_obj: Any) -> bool:
-    """判断可调用对象是否显式接收 ``reason`` 参数。
-
-    Args:
-        callable_obj: 待检查的可调用对象（通常是组件 ``execute``）。
-
-    Returns:
-        bool: 若显式声明 ``reason`` 或存在 ``**kwargs`` 则返回 True。
-    """
-    if not callable(callable_obj):
-        return False
-
-    try:
-        sig = inspect.signature(callable_obj)
-    except (TypeError, ValueError):
-        return False
-
-    if "reason" in sig.parameters:
-        return True
-
-    return any(
-        p.kind == inspect.Parameter.VAR_KEYWORD
-        for p in sig.parameters.values()
-    )
-
-
-def _normalize_schema_for_grammar(schema: Any) -> None:
-    """就地归一化 JSON Schema，提升与 grammar 编译器的兼容性。"""
-    if isinstance(schema, list):
-        for item in schema:
-            _normalize_schema_for_grammar(item)
-        return
-
-    if not isinstance(schema, dict):
-        return
-
-    if schema.get("default") is None:
-        schema.pop("default", None)
-
-    if schema.get("type") == "array" and "items" not in schema:
-        schema["items"] = {"type": "string"}
-
-    if schema.get("type") == "object" and "properties" not in schema:
-        schema.setdefault("additionalProperties", {"type": "string"})
-
-    for key in (
-        "properties",
-        "items",
-        "additionalProperties",
-        "anyOf",
-        "allOf",
-        "oneOf",
-    ):
-        value = schema.get(key)
-        if isinstance(value, dict):
-            for child in value.values():
-                _normalize_schema_for_grammar(child)
-        elif isinstance(value, list):
-            for child in value:
-                _normalize_schema_for_grammar(child)
-
-
 def _payloads_to_openai_messages(
     payloads: list[LLMPayload],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -261,6 +150,8 @@ def _payloads_to_openai_messages(
     """
     messages: list[dict[str, Any]] = []
     tools: list[dict[str, Any]] = []
+    canonical_tool_call_ids: dict[str, str] = {}
+    assistant_tool_call_group = 0
 
     for payload in payloads:
         if payload.role == ROLE.TOOL:
@@ -275,7 +166,8 @@ def _payloads_to_openai_messages(
 
             for part in payload.content:
                 if isinstance(part, ToolResult):
-                    tool_payloads.append((part.call_id, part.to_text()))
+                    stable_call_id = canonical_tool_call_ids.get(part.call_id, part.call_id)
+                    tool_payloads.append((stable_call_id, part.to_text()))
                     continue
 
                 if isinstance(part, Text) and fallback_text is None:
@@ -284,6 +176,7 @@ def _payloads_to_openai_messages(
 
                 call_id_value = getattr(part, "call_id", None)
                 call_id = call_id_value if isinstance(call_id_value, str) and call_id_value else None
+                stable_call_id = canonical_tool_call_ids.get(call_id, call_id)
 
                 to_text = getattr(part, "to_text", None)
                 if callable(to_text):
@@ -292,7 +185,7 @@ def _payloads_to_openai_messages(
                         text = text_value if isinstance(text_value, str) else str(text_value)
                     except Exception:
                         text = ""
-                    tool_payloads.append((call_id, text))
+                    tool_payloads.append((stable_call_id, text))
 
             if tool_payloads:
                 for tool_call_id, content_text in tool_payloads:
@@ -318,15 +211,19 @@ def _payloads_to_openai_messages(
             tool_calls_list: list[dict[str, Any]] = []
             text_parts: list[str] = []
             reasoning_parts: list[str] = []
+            tool_call_index = 0
 
-            for idx, part in enumerate(payload.content):
+            for part in payload.content:
                 if isinstance(part, ToolCall):
                     args_text = (
                         json.dumps(part.args, ensure_ascii=False)
                         if isinstance(part.args, dict)
                         else str(part.args)
                     )
-                    call_id = part.id or f"call_{idx}"
+                    call_id = f"call_{assistant_tool_call_group}_{tool_call_index}"
+                    tool_call_index += 1
+                    if part.id:
+                        canonical_tool_call_ids[part.id] = call_id
                     tool_calls_list.append(
                         {
                             "id": call_id,
@@ -349,6 +246,7 @@ def _payloads_to_openai_messages(
 
             reasoning_content = "".join(reasoning_parts)
             if tool_calls_list:
+                assistant_tool_call_group += 1
                 message: dict[str, Any] = {
                     "role": role,
                     "content": "".join(text_parts),
@@ -501,6 +399,134 @@ def _should_backfill_reasoning_content(messages: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _thinking_enabled(model_set: dict[str, Any]) -> bool:
+    """判断当前模型请求是否显式开启了 thinking 模式。"""
+    extra_params = model_set.get("extra_params")
+    if not isinstance(extra_params, dict):
+        return False
+
+    if extra_params.get("enable_thinking") is True:
+        return True
+
+    thinking = extra_params.get("thinking")
+    if thinking is True:
+        return True
+    if isinstance(thinking, dict):
+        enabled = thinking.get("enabled")
+        if enabled is not False:
+            return True
+
+    return False
+
+
+_USAGE_FIELD_MISSING = object()
+
+
+def _get_usage_field(usage_obj: Any, field_name: str, default: Any = 0) -> Any:
+    """从 usage 对象或映射中读取字段。
+
+    兼容 OpenAI SDK 对象、Pydantic model 以及部分兼容供应商返回的嵌套 dict。
+
+    Args:
+        usage_obj: usage 对象或 dict。
+        field_name: 字段名。
+        default: 字段缺失时返回的默认值。
+
+    Returns:
+        读取到的字段值；若不存在或为 None，则返回 default。
+    """
+    if usage_obj is None:
+        return default
+
+    value: Any = _USAGE_FIELD_MISSING
+    if isinstance(usage_obj, dict):
+        value = usage_obj.get(field_name, _USAGE_FIELD_MISSING)
+    else:
+        value = getattr(usage_obj, field_name, _USAGE_FIELD_MISSING)
+        if value is _USAGE_FIELD_MISSING:
+            model_extra = getattr(usage_obj, "model_extra", None)
+            if isinstance(model_extra, dict):
+                value = model_extra.get(field_name, _USAGE_FIELD_MISSING)
+        if value is _USAGE_FIELD_MISSING:
+            model_dump = getattr(usage_obj, "model_dump", None)
+            if callable(model_dump):
+                try:
+                    dumped = model_dump()
+                except Exception:
+                    dumped = None
+                if isinstance(dumped, dict):
+                    value = dumped.get(field_name, _USAGE_FIELD_MISSING)
+
+    if value is _USAGE_FIELD_MISSING or value is None:
+        return default
+    return value
+
+
+def _has_usage_field(usage_obj: Any, field_name: str) -> bool:
+    """判断 usage 对象中是否存在指定字段。"""
+    return _get_usage_field(usage_obj, field_name, _USAGE_FIELD_MISSING) is not _USAGE_FIELD_MISSING
+
+
+def _extract_usage_from_obj(usage_obj: Any) -> dict[str, Any]:
+    """从 OpenAI usage 对象中提取统计信息。"""
+    if usage_obj is None:
+        return {}
+
+    result: dict[str, Any] = {
+        "prompt_tokens": _get_usage_field(usage_obj, "prompt_tokens", 0) or 0,
+        "completion_tokens": _get_usage_field(usage_obj, "completion_tokens", 0) or 0,
+        "total_tokens": _get_usage_field(usage_obj, "total_tokens", 0) or 0,
+        "cache_hit_tokens": 0,
+        "cache_miss_tokens": 0,
+    }
+
+    details = _get_usage_field(usage_obj, "prompt_tokens_details", None)
+    if details is None:
+        details = _get_usage_field(usage_obj, "input_tokens_details", None)
+    if details is not None:
+        result["cache_hit_tokens"] = _get_usage_field(details, "cached_tokens", 0) or 0
+
+    explicit_cache_hit = (
+        _get_usage_field(usage_obj, "prompt_cache_hit_tokens", 0)
+        or _get_usage_field(usage_obj, "cache_read_input_tokens", 0)
+        or 0
+    )
+    explicit_cache_miss = _get_usage_field(usage_obj, "prompt_cache_miss_tokens", 0) or 0
+    result["cache_hit_tokens"] = result["cache_hit_tokens"] or explicit_cache_hit
+    result["cache_miss_tokens"] = explicit_cache_miss
+    result["cache_write_tokens"] = _get_usage_field(usage_obj, "cache_creation_input_tokens", 0) or 0
+
+    has_cache_signal = (
+        _has_usage_field(usage_obj, "prompt_cache_hit_tokens")
+        or _has_usage_field(usage_obj, "prompt_cache_miss_tokens")
+        or _has_usage_field(usage_obj, "cache_read_input_tokens")
+        or (details is not None and _has_usage_field(details, "cached_tokens"))
+    )
+    if (
+        has_cache_signal
+        and result["cache_miss_tokens"] <= 0
+        and result["prompt_tokens"] >= result["cache_hit_tokens"]
+    ):
+        result["cache_miss_tokens"] = result["prompt_tokens"] - result["cache_hit_tokens"]
+    return result
+
+
+def _extract_usage(resp: Any) -> dict[str, Any]:
+    """从 OpenAI 响应对象中提取 usage 统计信息。
+
+    解析 prompt_tokens、completion_tokens、total_tokens，
+    以及 prompt_tokens_details 中的 cached_tokens（缓存命中）。
+    兼容 DeepSeek 等提供商的 prompt_cache_hit_tokens / prompt_cache_miss_tokens。
+
+    Args:
+        resp: OpenAI ChatCompletion 响应对象。
+
+    Returns:
+        包含 token 统计的字典；若无 usage 字段则返回空 dict。
+    """
+    return _extract_usage_from_obj(_get_usage_field(resp, "usage", None))
+
+
 # _ClientCacheKey: (api_key, base_url, loop_id, timeout, trust_env, force_ipv4)
 _ClientCacheKey = tuple[str, str | None, int, float | None, bool, bool]
 
@@ -606,7 +632,9 @@ class OpenAIChatClient:
             max_keepalive_connections=5,
             keepalive_expiry=10.0,
         )
-        timeout_config = _build_httpx_timeout(timeout)
+        # 统一复用共享 timeout builder，确保所有 provider 客户端应用同一套
+        # httpx timeout 策略。
+        timeout_config = build_httpx_timeout(timeout)
         base_transport = (
             httpx.AsyncHTTPTransport(local_address="0.0.0.0")
             if force_ipv4
@@ -674,42 +702,31 @@ class OpenAIChatClient:
     def _extract_model_params(
         self, model_set: dict[str, Any]
     ) -> tuple[str, str | None, float | None, bool, bool, dict[str, Any]]:
-        """从 model_set dict 中解析并校验公共连接参数。
+        try:
+            (
+                api_key,
+                base_url,
+                timeout,
+                trust_env,
+                force_ipv4,
+                extra_params,
+            ) = extract_model_transport_params(model_set)
+        except ValueError as exc:
+            message = str(exc)
+            if message == "model.api_key cannot be empty":
+                raise ValueError("model.api_key 不能为空") from exc
+            if message == "model.extra_params must be a dict":
+                raise ValueError("model.extra_params 必须是 dict") from exc
+            raise
+        return (
+            api_key,
+            base_url,
+            timeout,
+            trust_env,
+            force_ipv4,
+            dict(extra_params),
+        )
 
-        Args:
-            model_set: 单个模型配置字典。
-
-        Returns:
-            六元组 ``(api_key, base_url, timeout, trust_env, force_ipv4, extra_params)``。
-
-        Raises:
-            ValueError: api_key 为空或 extra_params 非 dict 时抛出。
-        """
-        api_key = str(model_set.get("api_key") or "")
-        if not api_key:
-            raise ValueError("model.api_key 不能为空")
-
-        base_url = model_set.get("base_url")
-        base_url = str(base_url) if base_url else None
-        timeout = model_set.get("timeout")
-
-        extra_params = model_set.get("extra_params")
-        if extra_params is None:
-            extra_params = {}
-        if not isinstance(extra_params, dict):
-            raise ValueError("model.extra_params 必须是 dict")
-
-        extra_params = dict(extra_params)
-        trust_env_raw = extra_params.pop("trust_env", None)
-        trust_env = bool(trust_env_raw) if trust_env_raw is not None else True
-        force_ipv4 = bool(extra_params.pop("force_ipv4", False))
-        # 以下键由上层策略消费，client 侧不传给 API
-        extra_params.pop("context_reserve_ratio", None)
-        extra_params.pop("context_reserve_tokens", None)
-        extra_params.pop("force_sync_http", None)
-
-        timeout_float = float(timeout) if isinstance(timeout, (int, float)) else None
-        return api_key, base_url, timeout_float, trust_env, force_ipv4, extra_params
 
     # ------------------------------------------------------------------
     # 公开接口
@@ -724,7 +741,7 @@ class OpenAIChatClient:
         request_name: str,
         model_set: Any,
         stream: bool,
-    ) -> tuple[str | None, list[dict[str, Any]] | None, AsyncIterator[StreamEvent] | None, str | None]:
+    ) -> tuple[str | None, list[dict[str, Any]] | None, AsyncIterator[StreamEvent] | None, str | None, dict[str, Any] | None]:
         """发起一次聊天请求。
 
         Args:
@@ -789,9 +806,7 @@ class OpenAIChatClient:
         if openai_tools and not tool_call_compat:
             params["tools"] = openai_tools
             if "tool_choice" not in params:
-                # 默认策略：统一使用 required。
-                # 如果无法支持请在 model_set.extra_params 显式传入 tool_choice="auto"。
-                params["tool_choice"] = "required"
+                params["tool_choice"] = "auto"
         else:
             params.pop("tool_choice", None)
 
@@ -814,9 +829,9 @@ class OpenAIChatClient:
             else:
                 params["extra_body"] = extra_body
 
-        # 若上下文中已存在带 reasoning_content 的 assistant 响应，
-        # 则为其余缺失字段的 assistant 历史统一回填，避免 follow-up 400。
-        if _should_backfill_reasoning_content(messages):
+        # thinking 模式下，或上下文中已存在 reasoning_content 时，
+        # 为缺失字段的 assistant 历史统一回填，避免 follow-up 400。
+        if _thinking_enabled(model_set) or _should_backfill_reasoning_content(messages):
             for msg in messages:
                 if (
                     msg.get("role") == "assistant"
@@ -825,12 +840,14 @@ class OpenAIChatClient:
                     content = msg.get("content")
                     msg["reasoning_content"] = content if isinstance(content, str) else ""
 
-        _log_openai_request_body(
+        # 请求检查和 token 估算统一走共享观测 seam，这里只负责上报原始请求体。
+        log_provider_request_body(
             "chat.completions.create",
             params,
             model_set=model_set,
             payloads=payloads,
             request_name=request_name,
+            token_counter=count_payload_tokens,
         )
 
         if not stream:
@@ -862,7 +879,7 @@ class OpenAIChatClient:
         trust_env: bool,
         force_ipv4: bool,
         model_name: str,
-    ) -> tuple[str | None, list[dict[str, Any]] | None, None, str | None]:
+    ) -> tuple[str | None, list[dict[str, Any]] | None, None, str | None, dict[str, Any] | None]:
         """执行非流式聊天请求并返回解析结果。
 
         遇到网络/超时异常时会驱逐缓存的客户端，以便下次请求重建连接。
@@ -922,16 +939,17 @@ class OpenAIChatClient:
             parsed_message, parsed_calls = parse_tool_call_compat_response(
                 message_content
             )
-            return parsed_message, parsed_calls, None, reasoning_content
+            return parsed_message, parsed_calls, None, reasoning_content, _extract_usage(resp)
 
-        return message_content, tool_calls, None, reasoning_content
+        usage = _extract_usage(resp)
+        return message_content, tool_calls, None, reasoning_content, usage
 
     async def _create_stream(
         self,
         *,
         client: Any,
         params: dict[str, Any],
-    ) -> tuple[None, None, AsyncIterator[StreamEvent], None]:
+    ) -> tuple[None, None, AsyncIterator[StreamEvent], None, dict[str, Any] | None]:
         """执行流式聊天请求并返回事件迭代器。
 
         Args:
@@ -939,11 +957,12 @@ class OpenAIChatClient:
             params: 请求参数 dict（不含 ``stream`` 键）。
 
         Returns:
-            四元组 ``(None, None, AsyncIterator[StreamEvent], None)``。
+            五元组 ``(None, None, AsyncIterator[StreamEvent], None, None)``。
         """
         stream_params = dict(params)
         stream_params["stream"] = True
-        stream_resp = await client.chat.completions.create(**params, stream=True)
+        stream_params.setdefault("stream_options", {"include_usage": True})
+        stream_resp = await client.chat.completions.create(**stream_params)
 
         async def iter_events() -> AsyncIterator[StreamEvent]:
             """逐块迭代流式响应，产出 StreamEvent。
@@ -955,6 +974,10 @@ class OpenAIChatClient:
 
             try:
                 async for chunk in stream_resp:
+                    usage = _extract_usage_from_obj(_get_usage_field(chunk, "usage", None))
+                    if usage:
+                        yield StreamEvent(usage=usage)
+
                     if not chunk.choices:
                         continue
                     choice = chunk.choices[0]
@@ -1013,7 +1036,7 @@ class OpenAIChatClient:
                 if callable(close_sync):
                     close_sync()
 
-        return None, None, iter_events(), None
+        return None, None, iter_events(), None, None
 
     async def create_embedding(
         self,
@@ -1062,7 +1085,11 @@ class OpenAIChatClient:
         }
         params.update(extra_params)
 
-        _log_openai_request_body("embeddings.create", params)
+        log_provider_request_body(
+            "embeddings.create",
+            params,
+            token_counter=count_payload_tokens,
+        )
         resp = await client.embeddings.create(**params)
         data = getattr(resp, "data", None)
         if not data:
@@ -1141,7 +1168,11 @@ class OpenAIChatClient:
             if isinstance(top_n, int) and top_n > 0:
                 params["top_n"] = top_n
 
-            _log_openai_request_body("rerank.create", params)
+            log_provider_request_body(
+                "rerank.create",
+                params,
+                token_counter=count_payload_tokens,
+            )
             maybe_resp = rerank_create(**params)
             if inspect.isawaitable(maybe_resp):
                 resp = await maybe_resp

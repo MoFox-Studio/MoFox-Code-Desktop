@@ -9,12 +9,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, AsyncGenerator, cast
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Literal, cast
 
 from src.core.components.types import ChatType
 from src.core.components.base.action import BaseAction
 from src.core.components.base.agent import BaseAgent
 from src.core.components.base.tool import BaseTool
+from src.core.utils.context_compression import default_chat_context_compression_handler
 from src.kernel.concurrency import get_task_manager
 from src.kernel.logger import get_logger, COLOR
 
@@ -36,10 +37,22 @@ class Wait:
     表示 Chatter 需要等待一段时间。
 
     Attributes:
-        time: 等待时间（秒），如果为 None 则表示无限等待直到有新消息
+        time: 等待时间（秒），如果为 None 则表示无限等待直到有新消息；
+            如果为数字，则表示到期后由框架主动恢复生成器，不依赖新消息
+        step_data: 可选的步骤元数据，供框架在步进完成后发布通知事件
     """
 
     time: float | int | None = None
+    step_data: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class WaitResumeEvent:
+    """Wait/Stop 结束后由框架送回生成器的恢复事件。"""
+
+    source: Literal["message", "timer", "sub_agent"]
+    wait_time: float | int | None = None
+    unread_count: int = 0
 
 
 @dataclass
@@ -51,10 +64,12 @@ class Success:
     Attributes:
         message: 成功消息
         data: 可选的附加数据
+        step_data: 可选的步骤元数据，供框架在步进完成后发布通知事件
     """
 
     message: str
     data: dict[str, Any] | None = None
+    step_data: dict[str, Any] | None = None
 
 
 @dataclass
@@ -66,10 +81,12 @@ class Failure:
     Attributes:
         error: 错误消息
         exception: 可选的异常对象
+        step_data: 可选的步骤元数据，供框架在步进完成后发布通知事件
     """
 
     error: str
     exception: Exception | None = None
+    step_data: dict[str, Any] | None = None
 
 @dataclass
 class Stop:
@@ -79,11 +96,13 @@ class Stop:
 
     Attributes:
         time: 停止时间（秒）
+        step_data: 可选的步骤元数据，供框架在步进完成后发布通知事件
     """
 
     time: float | int
     direct_message_wake_enabled: bool = False
     direct_message_wake_probability: float = 0.0
+    step_data: dict[str, Any] | None = None
 
 # 类型别名
 ChatterResult = Wait | Success | Failure | Stop
@@ -123,6 +142,10 @@ class BaseChatter(ABC):
     associated_platforms: list[str] = []
     chat_type: ChatType = ChatType.ALL
 
+    # 可选的聊天流运行时声明；不设置时保持框架默认行为。
+    stream_tick_interval: float | None = None
+    allow_message_buffer: bool | None = None
+
     # 组件级依赖（精确到组件签名）
     dependencies: list[str] = []  # 例如 ["other_plugin:service:memory"]
 
@@ -139,6 +162,20 @@ class BaseChatter(ABC):
         """
         self.stream_id = stream_id
         self.plugin = plugin
+
+    def apply_stream_runtime_options(self, chat_stream: Any) -> None:
+        """将 chatter 声明的流运行时选项写入当前聊天流。"""
+
+        context = getattr(chat_stream, "context", None)
+        if context is None:
+            return
+
+        tick_interval = self.stream_tick_interval
+        if tick_interval is not None and tick_interval > 0:
+            context.tick_interval_override = float(tick_interval)
+
+        if self.allow_message_buffer is not None:
+            context.allow_message_buffer = bool(self.allow_message_buffer)
 
     @classmethod
     def get_signature(cls) -> str | None:
@@ -160,7 +197,7 @@ class BaseChatter(ABC):
     @abstractmethod
     async def execute(
         self
-    ) -> AsyncGenerator[ChatterResult, None]:
+    ) -> AsyncGenerator[ChatterResult, WaitResumeEvent | None]:
         """执行聊天器的主要逻辑。
 
         使用生成器模式，通过 yield 返回执行结果。
@@ -171,7 +208,7 @@ class BaseChatter(ABC):
         Examples:
             >>> async for result in my_chatter.execute():
             ...     if isinstance(result, Wait):
-            ...         print(f"等待: {result.reason}")
+            ...         print(f"等待: {result.time}")
             ...     elif isinstance(result, Success):
             ...         print(f"成功: {result.message}")
             ...     elif isinstance(result, Failure):
@@ -439,7 +476,6 @@ class BaseChatter(ABC):
         self,
         task: str = "actor",
         request_name: str = "",
-        max_context: int | None = None,
         with_reminder: str | SystemReminderBucket | None = None,
     ) -> "LLMRequest":
         """快速创建 LLM 请求，自动加载任务模型集与上下文管理器。
@@ -450,7 +486,6 @@ class BaseChatter(ABC):
         Args:
             task: 模型任务名称（对应 config/model.toml 中的 task key），默认 "actor"
             request_name: LLM 请求名称，默认使用 chatter_name
-            max_context: 上下文最大 payload 数，None 时从 core config 读取
             with_reminder: 可选的 system reminder bucket；传入后会自动登记到上下文管理器
 
         Returns:
@@ -459,13 +494,22 @@ class BaseChatter(ABC):
         Raises:
             KeyError: 当 task 在模型配置中不存在时
         """
-        from src.core.config import get_model_config, get_core_config
-        from src.kernel.llm import LLMRequest, LLMContextManager
+        from src.core.config import get_model_config
+        from src.kernel.llm import LLMRequest, LLMContextManager, ReminderSourceSpec
 
         model_set = get_model_config().get_task(task)
-        max_payloads = max_context if max_context is not None else get_core_config().chat.max_context_size
+        reminder_sources = None
+        if with_reminder is not None:
+            reminder_sources = [
+                ReminderSourceSpec(
+                    bucket=str(with_reminder),
+                    wrap_with_system_tag=True,
+                )
+            ]
+
         context_manager = LLMContextManager(
-            max_payloads=max_payloads,
+            context_compression_handler=default_chat_context_compression_handler,
+            reminder_sources=reminder_sources,
         )
 
         _logger = get_logger("chatter")
@@ -480,19 +524,9 @@ class BaseChatter(ABC):
         request = LLMRequest(
             model_set=model_set,
             request_name=request_name or self.chatter_name,
+            meta_data={"stream_id": self.stream_id},
             context_manager=context_manager,
         )
-
-        if with_reminder is not None:
-            from src.core.prompt import get_system_reminder_store
-
-            reminder_items = get_system_reminder_store().get_items(with_reminder)
-            for reminder_item in reminder_items:
-                context_manager.reminder(
-                    reminder_item.render(),
-                    insert_type=reminder_item.insert_type,
-                    wrap_with_system_tag=True,
-                )
 
         return request
 
@@ -596,7 +630,7 @@ class BaseChatter(ABC):
             str: 格式化后的消息行
         """
         # 时间
-        raw_time = getattr(msg, "time", None)
+        raw_time = msg.time
         if isinstance(raw_time, (int, float)):
             time_str = datetime.fromtimestamp(raw_time).strftime(time_format)
         elif isinstance(raw_time, datetime):
@@ -605,28 +639,28 @@ class BaseChatter(ABC):
             time_str = str(raw_time or "")
 
         # 角色
-        role_raw = getattr(msg, "sender_role", None)
+        role_raw = msg.sender_role
         role_str = BaseChatter._format_role(role_raw)
         role_part = f"<{role_str}> " if role_str else ""
 
         # 平台 ID（优先使用 sender_id，这是平台原始 ID）
-        platform_id = getattr(msg, "sender_id", "") or ""
+        platform_id = msg.sender_id or ""
         id_part = f"[{platform_id}] " if platform_id else ""
 
         # 名称部分：nickname$cardname（无 cardname 时省略 $cardname）
-        nickname = getattr(msg, "sender_name", "") or ""
-        cardname = getattr(msg, "sender_cardname", None)
+        nickname = msg.sender_name or ""
+        cardname = msg.sender_cardname
         if cardname and cardname != nickname:
             name_part = f"{nickname}${cardname}"
         else:
             name_part = nickname or "未知发送者"
 
         # 消息 ID 部分（用于LLM引用回复）
-        message_id = getattr(msg, "message_id", "") or ""
+        message_id = msg.message_id or ""
         msg_id_part = f"[{message_id}]" if message_id else ""
 
         # 消息内容
-        content = getattr(msg, "processed_plain_text", None) or str(getattr(msg, "content", ""))
+        content = msg.processed_plain_text or str(msg.content)
 
         return f"【{time_str}】{role_part}{id_part}{name_part} {msg_id_part}： {content}"
 

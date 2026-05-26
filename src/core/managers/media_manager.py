@@ -21,6 +21,7 @@ import asyncio
 import hashlib
 import time
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any
 from sqlalchemy import select
 
@@ -30,8 +31,8 @@ from src.kernel.llm.model_client.registry import ModelClientRegistry
 from src.core.prompt import PromptTemplate, get_prompt_manager
 from src.core.config import get_core_config
 from src.core.utils.base64_helper import base64_decode_to_bytes
-from src.kernel.concurrency import get_task_manager
 from src.kernel.scheduler import get_unified_scheduler, TriggerType
+from src.kernel.db import QueryBuilder, invalidate_model_cache
 from src.kernel.db.core.session import get_db_session
 from src.core.models.sql_alchemy import Images, ImageDescriptions
 from src.kernel.llm import LLMContextManager, LLMPayload, ROLE, Text, Image
@@ -62,7 +63,8 @@ class MediaManager:
     def __init__(self):
         """初始化媒体管理器。"""
         self._vlm_model_set = None
-        self._skip_vlm_stream_ids: set[str] = set()  # 已注册跳过 VLM 识别的聊天流 ID
+        # stream_id -> 跳过的媒体类型集合；值为 None 表示跳过所有类型
+        self._skip_vlm_streams: dict[str, frozenset[str] | None] = {}
         self._initialize_vlm()
         self._initialize_asr()
         self._register_prompts()
@@ -206,7 +208,11 @@ class MediaManager:
     # 公共 API：VLM 识别控制
     # ──────────────────────────────────────────
 
-    def skip_vlm_for_stream(self, stream_id: str) -> None:
+    def skip_vlm_for_stream(
+        self,
+        stream_id: str,
+        media_types: Iterable[str] | None = None,
+    ) -> None:
         """注册指定聊天流跳过 VLM 识别。
 
         调用后，该 stream_id 的消息在 MessageConverter 中将不再触发
@@ -215,9 +221,18 @@ class MediaManager:
 
         Args:
             stream_id: 要跳过 VLM 识别的聊天流 ID
+            media_types: 要跳过的媒体类型集合（如 ``("image",)``）。为 ``None``
+                时表示跳过所有类型，保持与旧调用兼容。
         """
-        self._skip_vlm_stream_ids.add(stream_id)
-        logger.debug(f"已注册跳过 VLM 识别: stream_id={stream_id[:8]}")
+        if media_types is None:
+            self._skip_vlm_streams[stream_id] = None
+            logger.debug(f"已注册跳过 VLM 识别: stream_id={stream_id[:8]} (全部类型)")
+            return
+        types = frozenset(media_types)
+        self._skip_vlm_streams[stream_id] = types
+        logger.debug(
+            f"已注册跳过 VLM 识别: stream_id={stream_id[:8]} (类型={sorted(types)})"
+        )
 
     def unskip_vlm_for_stream(self, stream_id: str) -> None:
         """取消指定聊天流的 VLM 识别跳过。
@@ -225,19 +240,32 @@ class MediaManager:
         Args:
             stream_id: 要恢复 VLM 识别的聊天流 ID
         """
-        self._skip_vlm_stream_ids.discard(stream_id)
+        self._skip_vlm_streams.pop(stream_id, None)
         logger.debug(f"已取消跳过 VLM 识别: stream_id={stream_id[:8]}")
 
-    def should_skip_vlm(self, stream_id: str) -> bool:
+    def should_skip_vlm(
+        self,
+        stream_id: str,
+        media_type: str | None = None,
+    ) -> bool:
         """查询指定聊天流是否应跳过 VLM 识别。
 
         Args:
             stream_id: 聊天流 ID
+            media_type: 待识别媒体的类型；省略时表示
+                ""该流是否对任意类型注册了跳过""，用于保留旧的整流粒度语义。
 
         Returns:
-            True 表示该聊天流已注册跳过 VLM 识别
+            True 表示该聊天流（针对给定媒体类型）应跳过 VLM 识别
         """
-        return stream_id in self._skip_vlm_stream_ids
+        if stream_id not in self._skip_vlm_streams:
+            return False
+        types = self._skip_vlm_streams[stream_id]
+        if types is None:
+            return True
+        if media_type is None:
+            return True
+        return media_type in types
 
     # ──────────────────────────────────────────
     # 公共 API：媒体识别
@@ -272,6 +300,10 @@ class MediaManager:
                 if cached_description:
                     logger.debug(f"从缓存获取{media_type}描述: {media_hash[:8]}...")
                     return cached_description
+
+            if not self._vlm_model_set:
+                logger.debug(f"VLM 模型不可用，跳过{media_type}识别")
+                return None
             
             # 保存到待识别文件夹
             pending_file_path = await self._save_to_pending(
@@ -383,6 +415,7 @@ class MediaManager:
             vlm_processed: 是否已经过 VLM 处理
         """
         try:
+            changed = False
             async with get_db_session() as session:
                 # 查找现有记录（使用 image_id 作为唯一标识）
                 # 这里使用 scalars().first() 来避免数据库中存在多条重复记录导致的 MultipleResultsFound 错误
@@ -402,6 +435,7 @@ class MediaManager:
                         existing.description = description
                     if vlm_processed:
                         existing.vlm_processed = True
+                    changed = True
                     logger.debug(f"更新媒体记录: {media_hash[:8]}... count={existing.count}")
                 else:
                     # 创建新记录
@@ -415,9 +449,12 @@ class MediaManager:
                         count=1
                     )
                     session.add(new_image)
+                    changed = True
                     logger.debug(f"创建新媒体记录: {media_hash[:8]}...")
 
                 await session.commit()
+            if changed:
+                invalidate_model_cache(Images)
 
         except Exception as e:
             logger.error(f"保存媒体信息失败: {e}", exc_info=True)
@@ -432,29 +469,24 @@ class MediaManager:
             媒体信息字典，不存在返回 None
         """
         try:
-            async with get_db_session() as session:
-                # 如果存在多条重复记录，取最新一条返回
-                stmt = (
-                    select(Images)
-                    .where(Images.image_id == media_hash)
-                    .order_by(Images.timestamp.desc())
-                    .limit(1)
-                )
-                result = await session.execute(stmt)
-                media = result.scalars().first()
-
-                if media:
-                    return {
-                        "id": media.id,
-                        "image_id": media.image_id,
-                        "path": media.path,
-                        "type": media.type,
-                        "description": media.description,
-                        "count": media.count,
-                        "timestamp": media.timestamp,
-                        "vlm_processed": media.vlm_processed
-                    }
-                return None
+            media = await (
+                QueryBuilder(Images)
+                .filter(image_id=media_hash)
+                .order_by("-timestamp")
+                .first()
+            )
+            if media is not None:
+                return {
+                    "id": media.id,
+                    "image_id": media.image_id,
+                    "path": media.path,
+                    "type": media.type,
+                    "description": media.description,
+                    "count": media.count,
+                    "timestamp": media.timestamp,
+                    "vlm_processed": media.vlm_processed,
+                }
+            return None
 
         except Exception as e:
             logger.error(f"查询媒体信息失败: {e}", exc_info=True)
@@ -487,9 +519,7 @@ class MediaManager:
                 return None
 
             # 创建 VLM 请求
-            context_manager = LLMContextManager(
-                max_payloads=3,
-            )
+            context_manager = LLMContextManager()
             request = create_llm_request(
                 self._vlm_model_set,
                 "image_recognition",
@@ -509,10 +539,10 @@ class MediaManager:
 
             # 处理 base64 数据：提取纯净的 base64 内容
             clean_base64 = self._extract_clean_base64(base64_data)
+            mime_type = self._extract_image_mime_type(base64_data)
             
             # 使用标准的 data URL 格式（大多数 VLM API 都支持）
-            # 假设是 PNG 图片，如果需要可以根据实际情况调整
-            image_value = f"data:image/png;base64,{clean_base64}"
+            image_value = f"data:{mime_type};base64,{clean_base64}"
 
             # 添加 payload 并发送请求
             request.add_payload(LLMPayload(ROLE.USER, [Text(prompt), Image(image_value)]))
@@ -554,7 +584,7 @@ class MediaManager:
             model_name = model_entry.get("model_identifier") if isinstance(model_entry, dict) else str(model_entry)
 
             clean_b64 = self._extract_clean_base64(audio_base64)
-            audio_bytes = await get_task_manager().to_process(
+            audio_bytes = await asyncio.to_thread(
                 base64_decode_to_bytes,
                 clean_b64,
             )
@@ -585,16 +615,13 @@ class MediaManager:
             缓存的描述，不存在返回 None
         """
         try:
-            async with get_db_session() as session:
-                stmt = select(ImageDescriptions).where(
-                    ImageDescriptions.image_description_hash == media_hash,
-                    ImageDescriptions.type == media_type
-                )
-                result = await session.execute(stmt)
-                # 使用 scalars().first() 避免 MultipleResultsFound 错误
-                desc = result.scalars().first()
-
-                return desc.description if desc else None
+            desc = await (
+                QueryBuilder(ImageDescriptions)
+                .filter(image_description_hash=media_hash, type=media_type)
+                .order_by("-timestamp")
+                .first()
+            )
+            return desc.description if desc else None
 
         except Exception as e:
             logger.debug(f"查询缓存失败: {e}")
@@ -614,6 +641,7 @@ class MediaManager:
             description: 描述文本
         """
         try:
+            created = False
             async with get_db_session() as session:
                 # 检查是否已存在（避免重复记录导致 MultipleResultsFound）
                 stmt = (
@@ -638,8 +666,11 @@ class MediaManager:
                         timestamp=time.time()
                     )
                     session.add(new_desc)
+                    created = True
                     await session.commit()
                     logger.debug(f"保存描述缓存: {media_hash[:8]}...")
+            if created:
+                invalidate_model_cache(ImageDescriptions)
 
         except Exception as e:
             logger.error(f"保存描述缓存失败: {e}", exc_info=True)
@@ -666,6 +697,15 @@ class MediaManager:
         data = data.replace("\n", "").replace("\r", "").replace(" ", "")
         
         return data
+
+    @staticmethod
+    def _extract_image_mime_type(data: str) -> str:
+        """从 data URL 中提取图片 MIME 类型。"""
+        if data.startswith("data:") and ";base64," in data:
+            mime_type = data.split(";", 1)[0][len("data:"):].strip().lower()
+            if mime_type.startswith("image/"):
+                return mime_type
+        return "image/png"
     
     async def _save_to_pending(
         self,
@@ -688,7 +728,7 @@ class MediaManager:
             clean_base64 = self._extract_clean_base64(base64_data)
             
             # 解码为二进制数据
-            binary_data = await get_task_manager().to_process(
+            binary_data = await asyncio.to_thread(
                 base64_decode_to_bytes,
                 clean_base64,
             )
@@ -701,7 +741,7 @@ class MediaManager:
             file_path = self.pending_folder / filename
             
             # 写入文件
-            file_path.write_bytes(binary_data)
+            await asyncio.to_thread(file_path.write_bytes, binary_data)
             logger.debug(f"媒体已保存到待识别文件夹: {filename}")
             
             return file_path
@@ -724,7 +764,7 @@ class MediaManager:
             media_hash: 媒体哈希值
         """
         try:
-            if not source_path.exists():
+            if not await asyncio.to_thread(source_path.exists):
                 logger.debug(f"源文件不存在，跳过移动: {source_path.name}")
                 return
             
@@ -735,16 +775,17 @@ class MediaManager:
             target_path = target_folder / source_path.name
             
             # 如果目标文件已存在，删除源文件即可（去重）
-            if target_path.exists():
-                source_path.unlink()
+            if await asyncio.to_thread(target_path.exists):
+                await asyncio.to_thread(source_path.unlink)
                 logger.debug(f"目标文件已存在，删除源文件: {source_path.name}")
                 return
             
             # 移动文件
-            source_path.rename(target_path)
+            await asyncio.to_thread(source_path.rename, target_path)
             logger.debug(f"文件已移动到 {media_type} 文件夹: {target_path.name}")
         except Exception as e:
             logger.error(f"移动文件失败: {e}")
+
 
     @staticmethod
     def _compute_hash(data: str) -> str:

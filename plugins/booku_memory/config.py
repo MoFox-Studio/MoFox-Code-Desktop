@@ -7,26 +7,13 @@ from typing import ClassVar
 from src.core.components.base.config import BaseConfig, Field, SectionBase, config_section
 
 
-# 预制文件夹定义：folder_id -> 中文显示名
-# 写入 Agent 会将此映射注入 system prompt，供内部 LLM 选择合适文件夹
-PREDEFINED_FOLDERS: dict[str, str] = {
-    "relations": "人物关系",
-    "plans": "未来规划",
-    "facts": "已知事实",
-    "preferences": "个人偏好",
-    "events": "重要事件",
-    "work": "工作学习",
-    "default": "未分类",
-}
-
-
 class BookuMemoryConfig(BaseConfig):
     """Booku Memory Agent 插件配置模型。"""
 
     config_name: ClassVar[str] = "config"
     config_description: ClassVar[str] = "Booku Memory Agent 配置"
 
-    @config_section("plugin", title="插件设置", tag="plugin", order=0)
+    @config_section("plugin", title="插件设置", tag="plugin")
     class PluginSection(SectionBase):
         """插件级开关。"""
 
@@ -34,30 +21,26 @@ class BookuMemoryConfig(BaseConfig):
             default=True,
             description="是否启用插件",
             label="启用插件",
-            tag="plugin",
-            order=0
-        )
-        enable_lite_mode: bool = Field(
-            default=False,
-            description=(
-                "是否启用轻量化模式。启用时对外暴露读取/写入两个 Tool, 最小化 LLM 调用, 平均召回时间在3s内；"
-                "关闭时采用 Agent 模式，对外暴露读取/写入两个 Agent, 执行完整记忆读写工作流。"
-            ),
-            label="轻量化模式",
-            tag="ai",
-            hint="开启后使用 Tool，关闭后使用 Agent",
-            order=1
+            tag="plugin"
         )
         inject_system_prompt: bool = Field(
             default=True,
             description="是否将记忆引导语同步到 default_chatter 的 actor system reminder",
             label="注入系统提示",
             tag="ai",
-            hint="开启后会在 AI 系统提示中添加记忆相关引导",
-            order=2
+            hint="开启后会在 AI 系统提示中添加记忆相关引导"
+        )
+        memory_tool_miss_warning_threshold: int = Field(
+            default=6,
+            description="actor 连续多少轮未调用 memory_command 后，向当前聊天流注入一次记忆工具使用警告",
+            label="记忆工具缺失告警阈值",
+            ge=1,
+            le=20,
+            tag="ai",
+            hint="达到阈值后仅对对应 stream 注入一次告警，直到再次调用记忆工具才重置"
         )
 
-    @config_section("storage", title="存储配置", tag="database", order=10)
+    @config_section("storage", title="存储配置", tag="database")
     class StorageSection(SectionBase):
         """存储层配置。"""
 
@@ -66,27 +49,24 @@ class BookuMemoryConfig(BaseConfig):
             description="SQLite 元数据数据库路径",
             label="元数据数据库",
             input_type="text",
-            tag="file",
-            order=0
+            tag="file"
         )
         vector_db_path: str = Field(
             default="data/chroma_db/booku_memory",
             description="向量数据库路径",
             label="向量数据库",
             input_type="text",
-            tag="file",
-            order=1
+            tag="file"
         )
         default_folder_id: str = Field(
             default="default",
             description="默认活动记忆文件夹 ID",
             label="默认文件夹",
             placeholder="default",
-            tag="general",
-            order=2
+            tag="general"
         )
 
-    @config_section("retrieval", title="检索配置", tag="ai", order=20)
+    @config_section("retrieval", title="检索配置", tag="ai")
     class RetrievalSection(SectionBase):
         """检索与重塑配置。"""
 
@@ -96,22 +76,19 @@ class BookuMemoryConfig(BaseConfig):
             label="默认召回数",
             ge=1,
             le=50,
-            tag="performance",
-            order=0
+            tag="performance"
         )
         include_archived_default: bool = Field(
             default=False,
             description="默认是否检索归档记忆",
             label="默认检索归档",
-            tag="general",
-            order=1
+            tag="general"
         )
         include_knowledge_default: bool = Field(
             default=False,
             description="默认是否检索知识库",
             label="默认检索知识库",
-            tag="general",
-            order=2
+            tag="general"
         )
         deduplication_threshold: float = Field(
             default=0.88,
@@ -121,8 +98,7 @@ class BookuMemoryConfig(BaseConfig):
             le=1.0,
             step=0.01,
             input_type="slider",
-            tag="performance",
-            order=3
+            tag="performance"
         )
         base_beta: float = Field(
             default=0.3,
@@ -132,8 +108,7 @@ class BookuMemoryConfig(BaseConfig):
             le=1.0,
             step=0.05,
             input_type="slider",
-            tag="ai",
-            order=4
+            tag="ai"
         )
         logic_depth_scale: float = Field(
             default=0.5,
@@ -142,8 +117,7 @@ class BookuMemoryConfig(BaseConfig):
             ge=0.0,
             le=2.0,
             step=0.1,
-            tag="ai",
-            order=5
+            tag="ai"
         )
         core_boost_min: float = Field(
             default=1.2,
@@ -152,8 +126,7 @@ class BookuMemoryConfig(BaseConfig):
             ge=1.0,
             le=3.0,
             step=0.1,
-            tag="performance",
-            order=6
+            tag="performance"
         )
         core_boost_max: float = Field(
             default=1.4,
@@ -162,8 +135,7 @@ class BookuMemoryConfig(BaseConfig):
             ge=1.0,
             le=3.0,
             step=0.1,
-            tag="performance",
-            order=7
+            tag="performance"
         )
         diffusion_boost: float = Field(
             default=0.3,
@@ -172,8 +144,7 @@ class BookuMemoryConfig(BaseConfig):
             ge=0.0,
             le=1.0,
             step=0.05,
-            tag="performance",
-            order=8
+            tag="performance"
         )
         opposing_penalty: float = Field(
             default=0.5,
@@ -182,11 +153,10 @@ class BookuMemoryConfig(BaseConfig):
             ge=0.0,
             le=1.0,
             step=0.05,
-            tag="performance",
-            order=9
+            tag="performance"
         )
 
-    @config_section("write_conflict", title="写入冲突检测", tag="ai", order=30)
+    @config_section("write_conflict", title="写入冲突检测", tag="ai")
     class WriteConflictSection(SectionBase):
         """写入冲突检测配置。"""
 
@@ -196,8 +166,7 @@ class BookuMemoryConfig(BaseConfig):
             label="检索样本数",
             ge=1,
             le=50,
-            tag="performance",
-            order=0
+            tag="performance"
         )
         energy_cutoff: float = Field(
             default=0.1,
@@ -207,11 +176,10 @@ class BookuMemoryConfig(BaseConfig):
             le=1.0,
             step=0.05,
             input_type="slider",
-            tag="ai",
-            order=1
+            tag="ai"
         )
 
-    @config_section("time_window", title="隐现记忆窗口", tag="timer", order=40)
+    @config_section("time_window", title="隐现记忆窗口", tag="timer")
     class TimeWindowSection(SectionBase):
         """隐现记忆时间窗口与晋升配置。"""
 
@@ -221,8 +189,7 @@ class BookuMemoryConfig(BaseConfig):
             label="时间窗口（天）",
             ge=1,
             le=30,
-            tag="timer",
-            order=0
+            tag="timer"
         )
         activation_threshold: int = Field(
             default=2,
@@ -230,11 +197,10 @@ class BookuMemoryConfig(BaseConfig):
             label="激活阈值",
             ge=1,
             le=20,
-            tag="performance",
-            order=1
+            tag="performance"
         )
 
-    @config_section("internal_llm", title="内部 LLM 配置", tag="ai", order=50)
+    @config_section("internal_llm", title="内部 LLM 配置", tag="ai")
     class InternalLLMSection(SectionBase):
         """Agent 内部 LLM 决策配置。"""
 
@@ -244,8 +210,7 @@ class BookuMemoryConfig(BaseConfig):
             label="模型任务",
             placeholder="tool_use",
             tag="ai",
-            hint="确保该任务在 model.toml 中已配置",
-            order=0
+            hint="确保该任务在 model.toml 中已配置"
         )
         max_reasoning_steps: int = Field(
             default=12,
@@ -253,11 +218,10 @@ class BookuMemoryConfig(BaseConfig):
             label="最大推理轮数",
             ge=1,
             le=50,
-            tag="performance",
-            order=1
+            tag="performance"
         )
 
-    @config_section("flashback", title="记忆闪回", tag="ai", order=60)
+    @config_section("flashback", title="记忆闪回", tag="ai")
     class FlashbackSection(SectionBase):
         """记忆闪回配置。
 
@@ -271,8 +235,7 @@ class BookuMemoryConfig(BaseConfig):
             default=False,
             description="是否启用记忆闪回机制",
             label="启用闪回",
-            tag="ai",
-            order=0
+            tag="ai"
         )
         trigger_probability: float = Field(
             default=0.05,
@@ -284,8 +247,7 @@ class BookuMemoryConfig(BaseConfig):
             input_type="slider",
             tag="performance",
             depends_on="enabled",
-            depends_value=True,
-            order=1
+            depends_value=True
         )
         archived_probability: float = Field(
             default=0.6,
@@ -297,18 +259,7 @@ class BookuMemoryConfig(BaseConfig):
             input_type="slider",
             tag="performance",
             depends_on="enabled",
-            depends_value=True,
-            order=2
-        )
-        folder_id: str | None = Field(
-            default=None,
-            description="限定抽取的 folder_id；为 None 时在所有 folder 中抽取",
-            label="限定文件夹",
-            placeholder="留空表示不限制",
-            tag="general",
-            depends_on="enabled",
-            depends_value=True,
-            order=3
+            depends_value=True
         )
         candidate_limit: int = Field(
             default=50,
@@ -318,8 +269,7 @@ class BookuMemoryConfig(BaseConfig):
             le=200,
             tag="performance",
             depends_on="enabled",
-            depends_value=True,
-            order=4
+            depends_value=True
         )
         activation_weight_exponent: float = Field(
             default=1.0,
@@ -333,8 +283,7 @@ class BookuMemoryConfig(BaseConfig):
             step=0.1,
             tag="performance",
             depends_on="enabled",
-            depends_value=True,
-            order=5
+            depends_value=True
         )
         cooldown_seconds: int = Field(
             default=3600,
@@ -349,11 +298,10 @@ class BookuMemoryConfig(BaseConfig):
             tag="timer",
             depends_on="enabled",
             depends_value=True,
-            hint="0 表示不启用去重",
-            order=6
+            hint="0 表示不启用去重"
         )
 
-    @config_section("chunking", title="分块配置", tag="ai", order=20)
+    @config_section("chunking", title="分块配置", tag="ai")
     class ChunkingSection(SectionBase):
         """文档切分参数配置。"""
 
@@ -364,7 +312,6 @@ class BookuMemoryConfig(BaseConfig):
             ge=300,
             le=3000,
             tag="performance",
-            order=0,
         )
         overlap_chars: int = Field(
             default=120,
@@ -373,10 +320,9 @@ class BookuMemoryConfig(BaseConfig):
             ge=0,
             le=500,
             tag="performance",
-            order=1,
         )
 
-    @config_section("startup_ingest", title="启动自动导入", tag="file", order=50)
+    @config_section("startup_ingest", title="启动自动导入", tag="file")
     class StartupIngestSection(SectionBase):
         """启动阶段本地知识库导入配置。（建议仅有未读文档需要导入时启用）"""
 
@@ -385,7 +331,6 @@ class BookuMemoryConfig(BaseConfig):
             description="是否在启动时自动导入配置路径文档",
             label="启用启动导入",
             tag="plugin",
-            order=0,
         )
         paths: list[str] = Field(
             default_factory=lambda: [r"data\booku_memory\knowledges"],
@@ -394,28 +339,24 @@ class BookuMemoryConfig(BaseConfig):
             input_type="list",
             item_type="str",
             tag="file",
-            order=1,
         )
         recursive: bool = Field(
             default=True,
             description="目录路径是否递归扫描子目录",
             label="递归扫描目录",
             tag="file",
-            order=2,
         )
         skip_missing_paths: bool = Field(
             default=True,
             description="路径不存在时是否跳过并继续",
             label="跳过不存在路径",
             tag="file",
-            order=3,
         )
         skip_existing_title: bool = Field(
             default=True,
             description="文档标题已存在时是否跳过导入",
             label="跳过已存在标题",
             tag="file",
-            order=4,
         )
 
     plugin: PluginSection = Field(default_factory=PluginSection)

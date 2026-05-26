@@ -89,8 +89,10 @@ plugins/
 ```json
 {
 	"name": "echo_demo",
+    "display_name": "Echo Demo",
 	"version": "1.0.0",
 	"description": "一个用于演示插件加载与命令执行的最小回显插件",
+    "icon": "icon.png",
 	"author": "MoFox Community",
 	"dependencies": {
 		"plugins": [],
@@ -133,7 +135,7 @@ from src.app.plugin_system.base import (
     cmd_route,
     register_plugin,
 )
-
+from src.app.plugin_system.api.send_api import send_text
 
 class EchoCommand(BaseCommand):
     """最小回显命令。"""
@@ -145,11 +147,13 @@ class EchoCommand(BaseCommand):
     @cmd_route("ping")
     async def handle_ping(self) -> tuple[bool, str]:
         """检查命令是否已经正常工作。"""
+        await send_text("pong", stream_id=self.stream_id)
         return True, "pong"
 
     @cmd_route("say")
     async def handle_say(self, text: str) -> tuple[bool, str]:
         """回显一段文本。"""
+        await send_text(f"echo: {text}", stream_id=self.stream_id)
         return True, f"echo: {text}"
 
 

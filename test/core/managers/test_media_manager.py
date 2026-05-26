@@ -100,6 +100,43 @@ class TestMediaManagerSkipVLM:
             
             assert manager.should_skip_vlm("stream_456") is False
 
+    def test_skip_vlm_for_stream_with_media_types(self) -> None:
+        """指定 media_types 时只对该类型生效，其余类型仍走 VLM。"""
+        with patch('src.core.managers.media_manager.get_model_set_by_task'):
+            manager = MediaManager()
+
+            manager.skip_vlm_for_stream("stream_dfc", media_types=("image",))
+
+            # 整流粒度查询：只要注册过任意类型，都视为跳过
+            assert manager.should_skip_vlm("stream_dfc") is True
+            # 类型粒度查询
+            assert manager.should_skip_vlm("stream_dfc", "image") is True
+            assert manager.should_skip_vlm("stream_dfc", "emoji") is False
+            assert manager.should_skip_vlm("stream_dfc", "voice") is False
+
+    def test_skip_vlm_for_stream_default_skips_all_types(self) -> None:
+        """不指定 media_types 时跳过所有媒体类型，保持向后兼容。"""
+        with patch('src.core.managers.media_manager.get_model_set_by_task'):
+            manager = MediaManager()
+
+            manager.skip_vlm_for_stream("stream_kfc")
+
+            assert manager.should_skip_vlm("stream_kfc") is True
+            assert manager.should_skip_vlm("stream_kfc", "image") is True
+            assert manager.should_skip_vlm("stream_kfc", "emoji") is True
+            assert manager.should_skip_vlm("stream_kfc", "voice") is True
+
+    def test_unskip_vlm_clears_typed_skip(self) -> None:
+        """unskip 必须同时清掉按类型注册的跳过。"""
+        with patch('src.core.managers.media_manager.get_model_set_by_task'):
+            manager = MediaManager()
+
+            manager.skip_vlm_for_stream("stream_dfc", media_types=("image",))
+            manager.unskip_vlm_for_stream("stream_dfc")
+
+            assert manager.should_skip_vlm("stream_dfc") is False
+            assert manager.should_skip_vlm("stream_dfc", "image") is False
+
 
 class TestMediaManagerRecognizeMedia:
     """测试媒体识别功能。"""
@@ -286,6 +323,20 @@ class TestMediaManagerSaveAndGetMediaInfo:
 
 class TestMediaManagerEdgeCases:
     """测试边界条件。"""
+
+    def test_extract_image_mime_type_prefers_data_url_value(self) -> None:
+        """data URL 中存在图片 MIME 时应优先使用真实类型。"""
+        mime_type = MediaManager._extract_image_mime_type(
+            "data:image/jpeg;base64,dGVzdA=="
+        )
+
+        assert mime_type == "image/jpeg"
+
+    def test_extract_image_mime_type_falls_back_to_png(self) -> None:
+        """无法提取图片 MIME 时保持原有 png 默认值。"""
+        mime_type = MediaManager._extract_image_mime_type("dGVzdA==")
+
+        assert mime_type == "image/png"
     
     @pytest.mark.asyncio
     async def test_recognize_empty_base64_data(self) -> None:

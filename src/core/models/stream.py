@@ -25,11 +25,12 @@ class StreamContext:
     Attributes:
         stream_id: 聊天流唯一标识符
         chat_type: 聊天类型（private/group/discuss）
-        max_context_size: 最大上下文大小
+        max_history_messages: 最大历史消息保留数量
         unread_messages: 未读消息列表
         history_messages: 历史消息列表
         is_active: 是否活跃
         is_chatter_processing: Chatter 是否正在处理
+        is_context_compressing: 是否正在执行上下文压缩
         message_cache: 消息缓存队列
         is_cache_enabled: 是否启用消息缓存
         last_message_time: 最近一次收到新消息的时间戳，None 表示尚未收到
@@ -38,11 +39,12 @@ class StreamContext:
 
     stream_id: str
     chat_type: str = "private"  # private/group/discuss
-    max_context_size: int = 100
+    max_history_messages: int = 100
     unread_messages: list["Message"] = field(default_factory=list)
     history_messages: list["Message"] = field(default_factory=list)
     is_active: bool = True
     is_chatter_processing: bool = False
+    is_context_compressing: bool = False
 
     # 当前消息
     current_message: "Message | None" = None
@@ -58,6 +60,11 @@ class StreamContext:
     # message_buffer_skip_count: 当前连续因缓冲而跳过的 Tick 次数
     last_message_time: float | None = None
     message_buffer_skip_count: int = 0
+
+    # Chatter 运行时流控制
+    # None 表示保持全局默认行为，由当前绑定的 chatter 按需覆盖。
+    tick_interval_override: float | None = None
+    allow_message_buffer: bool | None = None
 
     # 流循环任务引用
     stream_loop_task: asyncio.Task | None = field(default=None, repr=False)
@@ -78,8 +85,21 @@ class StreamContext:
         """
         self.history_messages.append(message)
         # 限制历史消息大小
-        if len(self.history_messages) > self.max_context_size:
-            self.history_messages = self.history_messages[-self.max_context_size :]
+        if (
+            self.max_history_messages > 0
+            and len(self.history_messages) > self.max_history_messages
+        ):
+            self.history_messages = self.history_messages[-self.max_history_messages :]
+
+    @property
+    def max_context_size(self) -> int:
+        """兼容旧代码读取，返回历史消息保留上限。"""
+        return self.max_history_messages
+
+    @max_context_size.setter
+    def max_context_size(self, value: int) -> None:
+        """兼容旧代码写入，更新历史消息保留上限。"""
+        self.max_history_messages = value
 
     def check_types(self, types: list[str]) -> bool:
         """检查当前消息是否支持指定的类型。

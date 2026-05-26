@@ -12,7 +12,15 @@ from typing import Annotated, Any, TYPE_CHECKING, cast
 
 from src.core.components.types import ChatType
 from src.core.components.utils import parse_function_signature
-from src.kernel.llm import LLMUsable, LLMRequest, LLMPayload, LLMUsableExecution, ROLE
+from src.kernel.llm import (
+    LLMContextManager,
+    LLMUsable,
+    LLMRequest,
+    LLMPayload,
+    LLMUsableExecution,
+    ROLE,
+    ReminderSourceSpec,
+)
 from src.kernel.logger import get_logger
 
 logger = get_logger("agent")
@@ -197,22 +205,28 @@ class BaseAgent(ABC, LLMUsable):
         Returns:
             LLMRequest: LLM 请求对象
         """
+        if context_manager is not None and with_reminder is not None:
+            raise ValueError(
+                "with_reminder 不能与自定义 context_manager 同时使用；"
+                "请在构造 context_manager 时直接配置 ReminderSourceSpec"
+            )
+
         request = LLMRequest(
             model_set=model_set,
             request_name=request_name,
-            context_manager=context_manager,
-        )
-
-        if with_reminder is not None and request.context_manager is not None:
-            from src.core.prompt import get_system_reminder_store
-
-            reminder_items = get_system_reminder_store().get_items(with_reminder)
-            for reminder_item in reminder_items:
-                request.context_manager.reminder(
-                    reminder_item.render(),
-                    insert_type=reminder_item.insert_type,
-                    wrap_with_system_tag=True,
+            context_manager=(
+                context_manager
+                if context_manager is not None or with_reminder is None
+                else LLMContextManager(
+                    reminder_sources=[
+                        ReminderSourceSpec(
+                            bucket=str(with_reminder),
+                            wrap_with_system_tag=True,
+                        )
+                    ]
                 )
+            ),
+        )
 
         if with_usables:
             request.add_payload(LLMPayload(ROLE.TOOL, cast(list[Any], self.get_local_usables())))

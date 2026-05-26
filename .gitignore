@@ -35,6 +35,7 @@ env.bak/
 .idea/
 *.sublime-workspace
 *.sublime-project
+.github/prompts/*
 
 # OS files
 .DS_Store
@@ -84,6 +85,7 @@ poetry.lock
 # Project-specific
 /.pytest_cache/
 /test/__pycache__/
+opencode.json
 
 logs/*
 htmlcov/
@@ -93,11 +95,15 @@ data/*
 .claude/
 config/*
 plugins/*
+skill/*
 
+.agents/
+skills-lock.json
 
 !plugins/default_chatter/
 !plugins/napcat_adapter/
 !plugins/booku_memory/
 !plugins/emoji_sender/
 !plugins/perm_plugin/
-
+!plugins/utility_commands/
+!plugins/skill_manager/

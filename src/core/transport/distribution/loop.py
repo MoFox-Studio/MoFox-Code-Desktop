@@ -13,19 +13,117 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from src.core.config import get_core_config
 from src.kernel.concurrency import get_watchdog
 from src.core.transport.distribution.tick import ConversationTick
-from src.core.components.base.chatter import Wait, Success, Failure, Stop
+from src.core.components.base.chatter import Wait, WaitResumeEvent, Success, Failure, Stop
 from src.kernel.logger import get_logger, COLOR
 
 if TYPE_CHECKING:
+    from src.core.models.message import Message
     from src.core.models.stream import StreamContext
     from src.core.transport.distribution import StreamLoopManager
 
 logger = get_logger("conversation_loop", display="会话循环", color=COLOR.MAGENTA)
+T = TypeVar("T")
+
+
+def _take_wait_resume_event(manager: "StreamLoopManager", stream_id: str) -> WaitResumeEvent | None:
+    """兼容真实管理器与测试替身，读取当前 tick 的等待恢复事件。"""
+    take_event = getattr(manager, "take_wait_resume_event", None)
+    if callable(take_event):
+        return cast(WaitResumeEvent | None, take_event(stream_id))
+    return None
+
+
+def _get_stream_step_timeout() -> float | None:
+    """返回聊天流单步执行超时配置。"""
+    timeout = float(get_core_config().bot.stream_step_timeout)
+    return timeout if timeout > 0 else None
+
+
+def _extract_step_data(result: Wait | Success | Failure | Stop) -> dict[str, object] | None:
+    """从 chatter 结果对象中提取步骤元数据。"""
+
+    step_data = getattr(result, "step_data", None)
+    if isinstance(step_data, dict):
+        return step_data
+    return None
+
+
+async def _publish_after_chatter_step_notification(
+    *,
+    stream_id: str,
+    context: "StreamContext",
+    tick: ConversationTick,
+    chatter_name: str,
+    result: Wait | Success | Failure | Stop,
+    event_manager: object,
+) -> None:
+    """发布 chatter 单步完成后的通知事件，不影响主执行流。"""
+
+    step_data = _extract_step_data(result)
+    params: dict[str, object] = {
+        "stream_id": stream_id,
+        "context": context,
+        "tick": tick,
+        "chatter_name": chatter_name,
+        "result": result,
+        "result_type": type(result).__name__.lower(),
+        "step_data": step_data,
+    }
+    if step_data:
+        params.update(step_data)
+
+    try:
+        publish_event = getattr(event_manager, "publish_event", None)
+        if callable(publish_event):
+            from src.core.components.types import EventType
+
+            publish_result = publish_event(EventType.AFTER_CHATTER_STEP, params)
+            if asyncio.iscoroutine(publish_result):
+                await publish_result
+    except Exception as exc:
+        logger.warning(
+            f"[驱动器] stream={stream_id[:8]}, 发布 AFTER_CHATTER_STEP 通知失败: {exc}"
+        )
+
+
+async def _await_stream_step(
+    awaitable: Awaitable[T],
+    *,
+    stream_id: str,
+    stage: str,
+) -> T:
+    """为聊天流关键 await 提供统一的超时保护。"""
+    timeout = _get_stream_step_timeout()
+    if timeout is None:
+        return await awaitable
+
+    try:
+        return await asyncio.wait_for(awaitable, timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError(
+            f"[驱动器] stream={stream_id[:8]}, {stage} 超时 ({timeout:.2f}s)"
+        ) from exc
+
+
+async def _get_stream_tick_interval(
+    stream_id: str,
+    get_context_func: Callable[[str], Awaitable["StreamContext | None"]],
+) -> float:
+    """返回当前聊天流的 tick 间隔，允许 chatter 覆盖全局默认值。"""
+
+    try:
+        context = await get_context_func(stream_id)
+        override = getattr(context, "tick_interval_override", None) if context else None
+        if override is not None and float(override) > 0:
+            return float(override)
+    except Exception:
+        pass
+    return float(get_core_config().bot.tick_interval)
 
 
 # ============================================================================
@@ -36,7 +134,7 @@ logger = get_logger("conversation_loop", display="会话循环", color=COLOR.MAG
 async def conversation_loop(
     stream_id: str,
     get_context_func: Callable[[str], Awaitable["StreamContext | None"]],
-    flush_cache_func: Callable[[str], Awaitable[list[Any]]],
+    flush_cache_func: Callable[[str], Awaitable[list["Message"]]],
     is_running_func: Callable[[], bool],
 ) -> AsyncIterator[ConversationTick]:
     """会话循环生成器 — 固定频率产出 Tick 事件。
@@ -64,8 +162,10 @@ async def conversation_loop(
                 tick_count=tick_count,
             )
 
-            # 3. 固定等待间隔
-            await asyncio.sleep(get_core_config().bot.tick_interval)
+            # 3. 等待间隔；允许 chatter 对自己的流覆盖全局 tick。
+            await asyncio.sleep(
+                await _get_stream_tick_interval(stream_id, get_context_func)
+            )
 
         except asyncio.CancelledError:
             logger.info(f"[生成器] stream={stream_id[:8]}, 被取消")
@@ -137,21 +237,25 @@ async def run_chat_stream(
                     # 处于等待中且未满足条件，跳过本次 Tick
                     continue
 
+                resume_event = _take_wait_resume_event(manager, stream_id)
+
                 # 2. 消息缓冲机制检查
                 # 若距上次收到消息未超过缓冲窗口，则跳过本次 Tick（等待用户连续消息合并），
                 # 但当连续跳过次数已达上限时强制继续，防止高压群聊导致 Bot 始终无法响应。
-                if not manager._message_buffer_check(stream_id, context):
+                if resume_event is None and not manager._message_buffer_check(stream_id, context):
                     continue
 
                 # 3. 获取或创建 chatter_gene
                 chatter_gene = manager._chatter_genes.get(stream_id)
+                chatter_gene_just_created = False
                 
                 if not chatter_gene:
-                    # 如果没有生成器，只有在有未处理消息时才尝试创建
-                    if not context.unread_messages:
+                    # 如果没有生成器，只有在有未处理消息或外部恢复事件时才尝试创建
+                    if not context.unread_messages and resume_event is None:
                         continue
-                        
+
                     # 查找或绑定 Chatter
+                    chat_stream = None
                     chatter = chatter_manager.get_chatter_by_stream(stream_id)
                     if not chatter:
                         from src.core.managers import get_stream_manager
@@ -164,8 +268,10 @@ async def run_chat_stream(
                         chatter = chatter_manager.get_or_create_chatter_for_stream(
                             stream_id, chat_stream.chat_type, chat_stream.platform
                         )
-                    
+
                     if chatter:
+                        if chat_stream is not None:
+                            chatter.apply_stream_runtime_options(chat_stream)
                         logger.debug(f"[驱动器] stream={stream_id[:8]}, 创建新会话生成器")
                         
                         # 设置触发用户 ID (从最后一条未读消息)
@@ -174,8 +280,13 @@ async def run_chat_stream(
                             
                         chatter_gene = chatter.execute()
                         if asyncio.iscoroutine(chatter_gene):
-                            chatter_gene = await chatter_gene
+                            chatter_gene = await _await_stream_step(
+                                chatter_gene,
+                                stream_id=stream_id,
+                                stage="创建 Chatter 生成器",
+                            )
                         manager._chatter_genes[stream_id] = chatter_gene
+                        chatter_gene_just_created = True
                 
                 if not chatter_gene:
                     continue
@@ -202,8 +313,33 @@ async def run_chat_stream(
                         )
                         continue
                     
-                    # 执行一步迭代
-                    result = await anext(chatter_gene)
+                    # 新建的异步生成器首次只能 anext()/asend(None)，
+                    # 避免 Wait 恢复事件在首次步进时触发协议错误。
+                    if chatter_gene_just_created and resume_event is not None:
+                        primed_result = await _await_stream_step(
+                            anext(chatter_gene),
+                            stream_id=stream_id,
+                            stage="预激 Chatter 生成器",
+                        )
+                        if not isinstance(primed_result, Wait):
+                            result = primed_result
+                        else:
+                            result = await _await_stream_step(
+                                chatter_gene.asend(resume_event),
+                                stream_id=stream_id,
+                                stage="执行 Chatter 单步",
+                            )
+                    else:
+                        step_awaitable = (
+                            chatter_gene.asend(resume_event)
+                            if resume_event is not None
+                            else anext(chatter_gene)
+                        )
+                        result = await _await_stream_step(
+                            step_awaitable,
+                            stream_id=stream_id,
+                            stage="执行 Chatter 单步",
+                        )
 
                     refreshed_context = await manager._get_stream_context(stream_id)
                     if not refreshed_context:
@@ -240,8 +376,24 @@ async def run_chat_stream(
                             time.time(),
                             len(context.unread_messages),
                         )
-                        logger.debug(f"[驱动器] stream={stream_id[:8]}, 进入 Stop 状态 (time={result.time})，销毁生成器")
+                        logger.debug(
+                            f"[驱动器] stream={stream_id[:8]}, 进入 Stop 状态 "
+                            f"(time={result.time}, "
+                            f"direct_wake={result.direct_message_wake_enabled}, "
+                            f"probability={result.direct_message_wake_probability:.2f})，销毁生成器"
+                        )
                         manager._chatter_genes.pop(stream_id, None)
+
+                    get_chatter = getattr(chatter_manager, "get_chatter_by_stream", None)
+                    chatter = get_chatter(stream_id) if callable(get_chatter) else None
+                    await _publish_after_chatter_step_notification(
+                        stream_id=stream_id,
+                        context=context,
+                        tick=tick,
+                        chatter_name=str(getattr(chatter, "chatter_name", "") or ""),
+                        result=result,
+                        event_manager=event_manager,
+                    )
                         
                     manager._stats["total_process_cycles"] += 1
 

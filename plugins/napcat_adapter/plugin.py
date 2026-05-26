@@ -199,6 +199,8 @@ class NapcatAdapter(BaseAdapter):
         """适配器卸载时的清理"""
         logger.info("Napcat 适配器正在关闭...")
 
+        self.meta_event_handler.stop_heartbeat_monitor()
+
         # 清理响应池
         for future in self._response_pool.values():
             if not future.done():
@@ -302,11 +304,19 @@ class NapcatAdapter(BaseAdapter):
         ).decode()
 
         try:
+            loop = asyncio.get_running_loop()
+            started_at = loop.time()
+
             # 发送请求
-            await self._ws.send(request)
+            await asyncio.wait_for(self._ws.send(request), timeout=timeout)
+
+            elapsed = loop.time() - started_at
+            remaining_timeout = timeout - elapsed
+            if remaining_timeout <= 0:
+                raise asyncio.TimeoutError()
 
             # 等待响应
-            response = await asyncio.wait_for(future, timeout=timeout)
+            response = await asyncio.wait_for(future, timeout=remaining_timeout)
             return response
 
         except asyncio.TimeoutError:

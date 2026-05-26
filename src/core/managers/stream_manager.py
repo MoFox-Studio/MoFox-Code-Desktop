@@ -16,8 +16,9 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 from async_lru import alru_cache
+from sqlalchemy import update as sa_update
 
-from src.kernel.db import CRUDBase, QueryBuilder
+from src.kernel.db import CRUDBase, QueryBuilder, get_db_session, invalidate_model_cache
 from src.kernel.logger import get_logger
 from src.core.config import get_core_config
 
@@ -126,6 +127,32 @@ class StreamManager:
 
         logger.info("StreamManager 初始化完成")
 
+    async def _ensure_stream_bot_identity(self, chat_stream: "ChatStream") -> None:
+        """确保 ChatStream 持有当前平台对应的 Bot 身份信息。"""
+        if chat_stream.bot_id and chat_stream.bot_nickname:
+            return
+
+        if not chat_stream.platform:
+            return
+
+        try:
+            from src.core.managers.adapter_manager import get_adapter_manager
+
+            bot_info = await get_adapter_manager().get_bot_info_by_platform(
+                chat_stream.platform
+            )
+            if not bot_info:
+                return
+
+            if not chat_stream.bot_id:
+                chat_stream.bot_id = str(bot_info.get("bot_id", "") or "")
+            if not chat_stream.bot_nickname:
+                chat_stream.bot_nickname = str(bot_info.get("bot_name", "") or "")
+        except Exception as e:
+            logger.warning(
+                f"回填 Bot 信息失败: platform={chat_stream.platform}, error={e}"
+            )
+
     # ==================== Stream Creation & Retrieval ====================
 
     async def get_or_create_stream(
@@ -180,6 +207,7 @@ class StreamManager:
             # 检查，避免等待锁期间已被其他协程创建
             existed = self._streams.get(stream_id)
             if existed is not None:
+                await self._ensure_stream_bot_identity(existed)
                 logger.debug(f"获取已存在的流实例: {stream_id}")
                 return existed
 
@@ -224,6 +252,8 @@ class StreamManager:
                     chat_type=chat_type,
                 )
 
+            await self._ensure_stream_bot_identity(chat_stream)
+
             # 存储到全局单例字典
             self._streams[stream_id] = chat_stream
 
@@ -255,11 +285,15 @@ class StreamManager:
             chat_type=stream_record.chat_type,
             stream_name=stream_record.group_name or "",
         )
+        await self._ensure_stream_bot_identity(chat_stream)
         chat_stream.create_time = stream_record.created_at
         chat_stream.last_active_time = stream_record.last_active_time
 
         # 加载上下文
-        chat_stream.context = await self.load_stream_context(stream_id, max_messages=get_core_config().chat.max_context_size)
+        chat_stream.context = await self.load_stream_context(
+            stream_id,
+            max_messages=get_core_config().chat.max_history_messages,
+        )
 
         logger.debug(f"从数据库构建流: {stream_id}")
 
@@ -293,8 +327,11 @@ class StreamManager:
                 chat_type="private",
             )
 
-        # 查询历史消息
-        query = QueryBuilder(self._Messages).filter(stream_id=stream_id).order_by("-id")
+        # 查询历史消息（如果有清空时间戳，只取该时间点之后的消息）
+        query = QueryBuilder(self._Messages).filter(stream_id=stream_id)
+        if stream_record.context_cleared_at is not None:
+            query = query.filter(time__gt=stream_record.context_cleared_at)
+        query = query.order_by("-id")
         if max_messages is not None:
             query = query.limit(max_messages)
         messages_records = await query.all()
@@ -302,13 +339,22 @@ class StreamManager:
         # 转换为运行时 Message 对象
         history_messages = []
         for msg_record in reversed(messages_records):  # 按时间正序
-            history_messages.append(await self._db_message_to_runtime(msg_record))  # type: ignore    
+            history_messages.append(
+                await self._db_message_to_runtime(  # type: ignore[arg-type]
+                    msg_record,
+                    chat_type=stream_record.chat_type,
+                )
+            )
 
         # 创建 StreamContext
         context = StreamContext(
             stream_id=stream_id,
             chat_type=stream_record.chat_type,
-            max_context_size=max_messages if max_messages else get_core_config().chat.max_context_size,  # 仅用于内存限制
+            max_history_messages=(
+                max_messages
+                if max_messages is not None
+                else get_core_config().chat.max_history_messages
+            ),
             history_messages=history_messages,
         )
 
@@ -623,13 +669,105 @@ class StreamManager:
             stream = await self.build_stream_from_database(stream_id)
             if stream:
                 self._streams[stream_id] = stream
+        elif not (stream.bot_id and stream.bot_nickname):
+            await self._ensure_stream_bot_identity(stream)
 
         if stream:
             stream.update_active_time()
             await self._update_stream_active_time(stream_id)
 
         return stream
-        
+
+    async def clear_stream_context(self, stream_id: str) -> bool:
+        """清空流的内存上下文，并将清空时间戳持久化到数据库。
+
+        若流已在内存中，立即清空其历史消息与未读消息；
+        同时将 ChatStreams.context_cleared_at 更新为当前时间，使清空效果在
+        重启后依然生效（重启后加载消息时只取该时间点以后的消息）。
+
+        若流在数据库中不存在（该流从未有过真实对话），则内存清空仍然执行，
+        但 DB 无需更新（该流没有历史消息可过滤）。
+
+        Args:
+            stream_id: 流ID
+
+        Returns:
+            始终返回 True
+
+        Examples:
+            >>> cleared = await sm.clear_stream_context("abc123")
+        """
+        clear_time = time.time()
+
+        # 清空内存中的流
+        stream = self._streams.get(stream_id)
+        if stream is not None:
+            stream.context.history_messages.clear()
+            stream.context.unread_messages.clear()
+            logger.debug(f"已直接清空内存流上下文: {stream_id}")
+
+        # 持久化清空时间戳到 DB（仅在有 DB 记录时更新）
+        record = await self._streams_crud.get_by(stream_id=stream_id)
+        if record:
+            await self._streams_crud.update(record.id, {"context_cleared_at": clear_time})
+            logger.debug(f"已持久化清空时间戳: {stream_id}")
+
+        return True
+
+    async def bulk_clear_streams(self, chat_type: str = "") -> int:
+        """批量清空流上下文，持久化清空时间戳到数据库。
+
+        此操作通过单条 UPDATE SQL 完成 DB 持久化，效率极高，
+        适用于 /清空上下文 私、/清空上下文 群、/清空上下文 all 等批量命令。
+
+        Args:
+            chat_type: 聊天类型（"group"/"private"），空字符串表示清空所有类型
+
+        Returns:
+            数据库中成功更新的流数量
+
+        Examples:
+            >>> count = await sm.bulk_clear_streams("private")
+        """
+        clear_time = time.time()
+
+        # 清空内存中符合条件的流
+        for stream in self._streams.values():
+            if not chat_type or stream.chat_type == chat_type:
+                stream.context.history_messages.clear()
+                stream.context.unread_messages.clear()
+
+        # 批量更新 DB 中的 context_cleared_at
+        async with get_db_session() as session:
+            stmt = sa_update(self._ChatStreams).values(context_cleared_at=clear_time)
+            if chat_type:
+                stmt = stmt.where(self._ChatStreams.chat_type == chat_type)
+            result = await session.execute(stmt)
+            await session.commit()
+            count = result.rowcount  # type: ignore[union-attr]
+        invalidate_model_cache(self._ChatStreams)
+
+        logger.debug(f"批量清空上下文，类型={chat_type or '全部'}，影响 {count} 条记录")
+        return count
+
+    async def get_stream_ids_by_chat_type(self, chat_type: str = "") -> list[str]:
+        """从数据库查询流ID列表。
+
+        Args:
+            chat_type: 聊天类型（"group"/"private"），空字符串返回所有类型
+
+        Returns:
+            流ID列表
+
+        Examples:
+            >>> ids = await sm.get_stream_ids_by_chat_type("private")
+        """
+        if chat_type:
+            records = await self._streams_crud.get_multi(limit=10000, chat_type=chat_type)
+        else:
+            records = await self._streams_crud.get_multi(limit=10000)
+        return [r.stream_id for r in records]
+
     # ==================== Private Helper Methods ====================
 
     async def _create_new_stream(
@@ -654,7 +792,6 @@ class StreamManager:
             ChatStream: 新创建的流对象
         """
         from src.core.models.stream import ChatStream
-        from src.core.managers.adapter_manager import get_adapter_manager
         from src.core.utils.user_query_helper import get_user_query_helper
 
         # 生成 stream_id
@@ -692,16 +829,6 @@ class StreamManager:
 
         await self._streams_crud.create(stream_data)
 
-        bot_id = ""
-        bot_nickname = ""
-        try:
-            bot_info = await get_adapter_manager().get_bot_info_by_platform(platform)
-            if bot_info:
-                bot_id = str(bot_info.get("bot_id", "") or "")
-                bot_nickname = str(bot_info.get("bot_name", "") or "")
-        except Exception as e:
-            logger.warning(f"获取 Bot 信息失败，将使用空值: platform={platform}, error={e}")
-
         # stream_name：由调用方按聊天类型传入（群聊=群名，私聊=xxx的私聊）
         stream_name = group_name or ""
 
@@ -710,10 +837,9 @@ class StreamManager:
             stream_id=stream_id,
             platform=platform,
             chat_type=chat_type,
-            bot_id=bot_id,
-            bot_nickname=bot_nickname,
             stream_name=stream_name,
         )
+        await self._ensure_stream_bot_identity(chat_stream)
         chat_stream.create_time = now
         chat_stream.last_active_time = now
 
@@ -746,7 +872,12 @@ class StreamManager:
             self._stream_locks[stream_id] = asyncio.Lock()
         return self._stream_locks[stream_id]
 
-    async def _db_message_to_runtime(self, db_message: "Messages") -> "Message":
+    async def _db_message_to_runtime(
+        self,
+        db_message: "Messages",
+        *,
+        chat_type: str | None = None,
+    ) -> "Message":
         """将数据库消息转换为运行时消息。
 
         Args:
@@ -757,13 +888,10 @@ class StreamManager:
         """
         from src.core.models.message import Message, MessageType
         from src.core.utils.user_query_helper import get_user_query_helper
-        from src.core.managers import get_stream_manager
-
-        stream_info = await get_stream_manager().get_stream_info(db_message.stream_id)
-
         sender_id = "system"
         sender_name = "未知用户"
         sender_cardname = ""
+        sender_role: str | None = None
 
         if db_message.person_id:
             try:
@@ -786,6 +914,7 @@ class StreamManager:
 
         # person_id == "bot" 表示 Bot 发送的消息
         if db_message.person_id == "bot" and db_message.platform:
+            sender_role = "bot"
             try:
                 from src.core.managers.adapter_manager import get_adapter_manager
 
@@ -819,8 +948,9 @@ class StreamManager:
             sender_id=sender_id,
             sender_name=sender_name,
             sender_cardname=sender_cardname,
+            sender_role=sender_role,
             platform=db_message.platform or "",
-            chat_type=stream_info.get("chat_type", "private") if stream_info else "private",
+            chat_type=chat_type or "private",
             stream_id=db_message.stream_id,
             raw_data=None,
             extra={},

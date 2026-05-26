@@ -1,7 +1,8 @@
 {
     "name": "booku_memory",
+    "display_name": "Booku 记忆",
     "version": "1.0.0",
-    "description": "Agent 驱动的 Booku 记忆系统插件，提供分层记忆写入与检索能力",
+    "description": "命令驱动的 Booku 记忆系统插件，提供长期记忆工具 memory_command 和短期便签工具 temporary_memo。",
     "author": "MoFox Team",
     "dependencies": {
         "plugins": [],
@@ -9,21 +10,31 @@
     },
     "include": [
         {
-            "component_type": "agent",
-            "component_name": "booku_memory_write",
+            "component_type": "tool",
+            "component_name": "memory_command",
             "dependencies": []
         },
         {
-            "component_type": "agent",
-            "component_name": "booku_memory_read",
+            "component_type": "tool",
+            "component_name": "temporary_memo",
             "dependencies": []
         },
         {
             "component_type": "service",
             "component_name": "booku_memory",
             "dependencies": []
+        },
+        {
+            "component_type": "service",
+            "component_name": "booku_knowledge",
+            "dependencies": []
+        },
+        {
+            "component_type": "router",
+            "component_name": "memory_admin",
+            "dependencies": []
         }
     ],
     "entry_point": "plugin.py",
-    "min_core_version": "1.0.0"
+    "min_core_version": "1.2.0-alpha.3"
 }
