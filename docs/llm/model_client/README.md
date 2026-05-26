@@ -1,53 +1,53 @@
-﻿# Model Client 模块
+# Model Client 模块
 
 ## 概述
 
-`model_client/` 子模块实现了与各个 LLM 提供商的交互。它定义了统一的客户端接口，并提供了 OpenAI 的具体实现。框架设计允许轻松扩展支持其他提供商。
+model_client/ 子模块实现了与各个 LLM 提供商的交互。它定义了统一的客户端接口，并提供了 OpenAI 和 Anthropic 的具体实现。框架设计允许轻松扩展支持其他提供商。
 
 ## 模块结构
 
-```
+`
 model_client/
-├── base.py           # 客户端接口协议
-├── openai_client.py  # OpenAI 实现
-├── registry.py       # 客户端注册表
-└── __init__.py       # 公开 API
-```
+├── base.py              # 客户端接口与 StreamEvent
+├── openai_client.py     # OpenAI 实现
+├── anthropic_client.py  # Anthropic 实现
+├── registry.py          # 客户端注册表
+└── __init__.py          # 公开 API
+`
 
 ## StreamEvent（流事件）
 
-```python
+`python
 @dataclass(frozen=True, slots=True)
 class StreamEvent:
     """provider-agnostic 的流事件。"""
-    
-    text_delta: str | None = None      # 文本增量
-    tool_call_id: str | None = None    # 工具调用 ID
-    tool_name: str | None = None       # 工具名称
-    tool_args_delta: str | None = None # 工具参数增量
-```
+
+    text_delta: str | None = None             # 文本增量
+    tool_call_id: str | None = None           # 工具调用 ID
+    tool_name: str | None = None              # 工具名称
+    tool_args_delta: str | None = None        # 工具参数增量
+    reasoning_delta: str | None = None        # 推理/thinking 增量（Anthropic）
+    reasoning_signature_delta: str | None = None  # thinking 签名增量（Anthropic）
+    reasoning_block_type: str | None = None   # thinking 块类型
+`
 
 表示流式响应中的单个事件。这是提供商无关的统一格式。
 
-**使用示例：**
-```python
-# 文本事件
-event1 = StreamEvent(text_delta="Hello, ")
-event2 = StreamEvent(text_delta="world!")
+**字段组合语义：**
 
-# 工具调用事件
-event3 = StreamEvent(
-    tool_call_id="call_123",
-    tool_name="search",
-    tool_args_delta='{"query": "'
-)
-```
+| 场景 | 使用字段 |
+|---|---|
+| 文本增量 | 	ext_delta |
+| 工具调用开始 | 	ool_call_id + 	ool_name |
+| 工具参数增量 | 	ool_args_delta |
+| 推理/thinking | reasoning_delta / reasoning_block_type |
+| thinking 签名 | reasoning_signature_delta |
 
 ---
 
 ## ChatModelClient 协议
 
-```python
+`python
 class ChatModelClient(Protocol):
     async def create(
         self,
@@ -58,108 +58,35 @@ class ChatModelClient(Protocol):
         request_name: str,
         model_set: Any,
         stream: bool,
-    ) -> tuple[str | None, list[dict[str, Any]] | None, AsyncIterator[StreamEvent] | None]:
+    ) -> tuple[str | None, list[dict[str, Any]] | None, AsyncIterator[StreamEvent] | None, list[ReasoningText] | None]:
         """发起一次聊天请求。
-        
-        返回三元组：
+
+        返回四元组：
         - message: 非流时的完整文本；流式则为 None
         - tool_calls: 非流时解析出的工具调用列表；流式则为 None
         - stream_iter: 流式迭代器；非流则为 None
+        - reasoning: thinking/reasoning 内容列表；无则为 None
         """
-```
+`
 
-定义了所有模型客户端必须实现的接口。
-
-**参数：**
-- `model_name`: 模型标识符（如 "gpt-4"）
-- `payloads`: 消息列表
-- `tools`: 可用工具列表
-- `request_name`: 请求名称
-- `model_set`: 模型配置
-- `stream`: 是否使用流式
-
-**返回值：**
-- `message`: 非流式时的完整响应文本；流式时为 None
-- `tool_calls`: 非流式时解析的工具调用列表（dict 格式）；流式时为 None
-- `stream_iter`: 流式迭代器；非流式时为 None
+定义了所有聊天模型客户端必须实现的接口。
 
 ---
 
 ## OpenAIChatClient
 
-```python
-class OpenAIChatClient:
-    """OpenAI provider。
-    
-    依赖 openai>=2.x。
-    """
-```
+OpenAI 的具体实现。依赖 openai>=2.x。
 
-OpenAI 的具体实现。
-
-### 内部机制
-
-#### Payload 转换
-
-```python
-def _payloads_to_openai_messages(payloads: list[LLMPayload]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """将 LLMPayload 转换为 OpenAI 消息格式。
-    
-    返回 (messages, tools)
-    """
-```
-
-将标准的 `LLMPayload` 转换为 OpenAI 的消息格式：
-
-- `ROLE.SYSTEM` → `{"role": "system", "content": "..."}`
-- `ROLE.USER` → `{"role": "user", "content": "..."}`
-- `ROLE.ASSISTANT` → `{"role": "assistant", "content": "..."}`
-- `ROLE.TOOL` → tools 列表
-- `ROLE.TOOL_RESULT` → `{"role": "tool", "content": "...", "tool_call_id": "..."}`
-
-**多模态支持：**
-```python
-# 图文混合会转换为 OpenAI 的 content parts 格式
-{
-    "role": "user",
-    "content": [
-        {"type": "text", "text": "What's in this image?"},
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
-    ]
-}
-```
-
-#### 图像处理
-
-```python
-def _image_to_data_url(value: str) -> str:
-    """转换图像为 data URL。"""
-```
-
-支持多种图像格式：
-- 文件路径：自动读取并 base64 编码
-- Data URL：直接使用
-- Base64 快捷格式：转换为标准 data URL
-
-#### 客户端缓存
-
-```python
-def _get_client(self, *, api_key: str, base_url: str | None, timeout: float | None):
-    """获取或创建 AsyncOpenAI 客户端（带缓存）。"""
-```
-
-缓存机制：
-- 按 `(api_key, base_url, event_loop)` 缓存
-- 避免重复创建客户端
-- 线程安全
-
-**重要：** 禁用了 OpenAI SDK 的自动重试（`max_retries=0`），重试由 policy 层完全控制。
+### 功能特性
+- 异步聊天补全（流式和非流式）
+- 工具调用（function calling）
+- 多模态支持（文本 + 图像）
+- 客户端缓存（按 api_key/base_url）
+- 自动重试禁用（由 policy 层控制）
 
 ### 使用示例
 
-```python
-from src.kernel.llm import LLMRequest, LLMPayload, Text, ROLE
-
+`python
 models = [{
     "client_type": "openai",
     "model_identifier": "gpt-4",
@@ -169,197 +96,202 @@ models = [{
 
 request = LLMRequest(model_set=models)
 request.add_payload(LLMPayload(ROLE.USER, Text("Hello!")))
+response = await request.send()
+`
 
+---
+
+## AnthropicChatClient
+
+Anthropic 的具体实现。依赖 nthropic SDK。
+
+### 功能特性
+- 异步聊天补全（流式和非流式）
+- 工具调用（tool use）
+- Thinking/Reasoning 内容支持（Claude 的扩展思考）
+- ReasoningText 提取
+- 客户端缓存（按 api_key/base_url/thinking 配置）
+- 自定义 httpx 超时配置
+
+### Reasoning / Thinking 支持
+
+Anthropic 的 Claude 模型支持 extended thinking，客户端会自动提取 thinking 内容作为 ReasoningText：
+
+`python
+# 响应中自动包含推理内容
 response = await request.send()
 message = await response
-```
+
+# 推理内容可通过 payloads 中的 ReasoningText 访问
+`
+
+### 配置示例
+
+`python
+models = [{
+    "client_type": "anthropic",
+    "model_identifier": "claude-sonnet-4-20250514",
+    "api_key": "sk-ant-...",
+    "temperature": 0.7,
+    "max_tokens": 4096,
+    "extra_params": {
+        "thinking": {"type": "enabled", "budget_tokens": 1024}
+    },
+}]
+
+request = LLMRequest(model_set=models)
+request.add_payload(LLMPayload(ROLE.USER, Text("Solve this complex problem...")))
+response = await request.send()
+`
+
+### Payload 转换
+
+Anthropic 客户端会将 LLMPayload 转换为 Anthropic 的 Messages API 格式：
+- ROLE.SYSTEM → system prompt（支持多个 system payload 拼接）
+- ROLE.USER → user message（支持多模态 content blocks）
+- ROLE.ASSISTANT → assistant message
+- ROLE.TOOL → tools 声明
+- ROLE.TOOL_RESULT → tool_result content block
 
 ---
 
 ## ModelClientRegistry
 
-```python
+`python
 @dataclass(slots=True)
 class ModelClientRegistry:
-    """provider -> client 的注册表。
-    
-    当前默认提供 openai client；gemini/bedrock 后续可注册。
-    """
-    
     openai: ChatModelClient | None = None
+    claude: ChatModelClient | None = None
     gemini: ChatModelClient | None = None
     bedrock: ChatModelClient | None = None
-```
+`
 
 管理不同提供商的客户端实例。
 
-### get_client_for_model
+### 核心方法
 
-```python
+#### get_client_for_model / get_chat_client_for_model
+
+`python
 def get_client_for_model(self, model: dict[str, Any]) -> ChatModelClient:
-    """根据单个模型配置决定使用哪个 provider。
-    
-    当前阶段以 `client_type` 为准：openai/gemini/bedrock。
-    """
-```
+    """根据单个模型配置决定使用哪个 provider。"""
 
-根据模型配置的 `client_type` 返回相应的客户端。
+def get_chat_client_for_model(self, model: dict[str, Any]) -> ChatModelClient:
+    """获取聊天客户端。"""
+`
 
-**使用示例：**
-```python
-registry = ModelClientRegistry()
+client_type 映射：
+| client_type | 客户端 |
+|---|---|
+| "openai" | OpenAIChatClient |
+| "anthropic" / "claude" | AnthropicChatClient |
+| "gemini" | Gemini 客户端（需注册） |
+| "bedrock" | Bedrock 客户端（需注册） |
 
-# OpenAI 模型
-model_config = {
-    "client_type": "openai",
-    "model_identifier": "gpt-4",
-    "api_key": "sk-..."
-}
-client = registry.get_client_for_model(model_config)
+#### get_embedding_client_for_model
 
-# 或使用其他提供商
-model_config2 = {
-    "client_type": "gemini",
-    "model_identifier": "gemini-pro",
-    "api_key": "..."
-}
-# client2 = registry.get_client_for_model(model_config2)  # 需要先注册
-```
+`python
+def get_embedding_client_for_model(self, model: dict[str, Any]):
+    """获取 Embedding 客户端。"""
+`
+
+用于 EmbeddingRequest 发起向量嵌入请求。
+
+#### get_rerank_client_for_model
+
+`python
+def get_rerank_client_for_model(self, model: dict[str, Any]):
+    """获取 Rerank 客户端。"""
+`
+
+用于 RerankRequest 发起文档重排序请求。
 
 ### 注册自定义客户端
 
-```python
-from src.kernel.llm.model_client import ChatModelClient, ModelClientRegistry
-
-class MyCustomClient:
-    async def create(self, *, model_name, payloads, tools, request_name, model_set, stream):
-        # 实现自定义逻辑
-        pass
-
-registry = ModelClientRegistry()
-registry.gemini = MyCustomClient()  # 注册自定义客户端
-
-# 现在可以使用
-model_config = {"client_type": "gemini", ...}
-client = registry.get_client_for_model(model_config)
-```
-
----
-
-## 扩展支持新的提供商
-
-### 步骤 1：实现客户端
-
-```python
-from src.kernel.llm.model_client import ChatModelClient, StreamEvent
-from src.kernel.llm import LLMPayload, Tool
-from typing import AsyncIterator
-
-class GeminiClient:
-    """Google Gemini 客户端实现。"""
-    
-    async def create(
-        self,
-        *,
-        model_name: str,
-        payloads: list[LLMPayload],
-        tools: list[Tool],
-        request_name: str,
-        model_set: Any,
-        stream: bool,
-    ) -> tuple[str | None, list[dict[str, Any]] | None, AsyncIterator[StreamEvent] | None]:
-        """发起 Gemini 请求。"""
-        
-        # 1. 转换 payloads 为 Gemini 格式
-        messages = self._convert_to_gemini_format(payloads)
-        
-        # 2. 初始化 Gemini 客户端
-        client = self._get_gemini_client(model_set)
-        
-        # 3. 发起请求
-        if stream:
-            stream_iter = self._create_stream(client, messages, tools)
-            return None, None, stream_iter
-        else:
-            message, tool_calls = await self._create_non_stream(client, messages, tools)
-            return message, tool_calls, None
-    
-    def _convert_to_gemini_format(self, payloads: list[LLMPayload]) -> list[dict]:
-        """转换为 Gemini API 格式。"""
-        # 实现转换逻辑
-        pass
-```
-
-### 步骤 2：注册客户端
-
-```python
+`python
 from src.kernel.llm.model_client import ModelClientRegistry
 
 registry = ModelClientRegistry()
+registry.claude = AnthropicChatClient()
 registry.gemini = GeminiClient()
 
-# 在 LLMRequest 中使用
 request = LLMRequest(model_set=models, clients=registry)
-```
+`
 
-### 步骤 3：配置模型
+---
 
-```python
-models = [
-    {
-        "client_type": "gemini",
-        "model_identifier": "gemini-pro",
-        "api_key": "...",
-    }
-]
+## 扩展新提供商
 
-request = LLMRequest(model_set=models, clients=registry)
-```
+### 步骤 1：实现 ChatModelClient 协议
+
+`python
+from src.kernel.llm.model_client import StreamEvent
+from src.kernel.llm import LLMPayload, ReasoningText
+from typing import AsyncIterator
+
+class MyProviderClient:
+    async def create(
+        self, *, model_name, payloads, tools, request_name, model_set, stream
+    ) -> tuple[str | None, list[dict] | None, AsyncIterator[StreamEvent] | None, list[ReasoningText] | None]:
+        # 转换 payloads 为提供商格式
+        # 发起请求
+        # 返回四元组
+        pass
+`
+
+### 步骤 2：实现 Embedding 和 Rerank 接口（可选）
+
+`python
+class MyProviderClient:
+    # ... ChatModelClient 实现 ...
+
+    async def create_embedding(self, *, model_name, inputs, request_name, model_set):
+        # 返回 list[list[float]]
+        pass
+
+    async def create_rerank(self, *, model_name, query, documents, top_n, request_name, model_set):
+        # 返回 list[dict]（每项含 index/score/document）
+        pass
+`
+
+### 步骤 3：在注册表中注册
+
+`python
+registry = ModelClientRegistry()
+# 聊天
+registry.__dict__["my_provider"] = MyProviderClient()
+
+# 或在 get_client_for_model 中添加 client_type 分支
+`
 
 ---
 
 ## 常见问题
 
-### Q: 如何切换 LLM 提供商？
+### Q: OpenAI 和 Anthropic 客户端能否混用？
 
-A: 通过 `client_type` 字段：
-```python
-# OpenAI
-models1 = [{"client_type": "openai", "model_identifier": "gpt-4", ...}]
+A: 可以。使用多模型配置和策略：
+`python
+models = [
+    {"client_type": "openai", "model_identifier": "gpt-4", ...},
+    {"client_type": "anthropic", "model_identifier": "claude-sonnet-4-20250514", ...},
+]
+`
 
-# Gemini（需要注册）
-models2 = [{"client_type": "gemini", "model_identifier": "gemini-pro", ...}]
-```
+### Q: 重试在哪一层控制？
 
-### Q: OpenAI 的重试是如何工作的？
+A: 客户端内部禁用 SDK 级别重试，由 policy 层统一控制。
 
-A: OpenAI 客户端禁用了 SDK 级别的重试。重试由 `policy` 层完全控制，允许更细粒度的控制。
+### Q: Anthropic thinking 如何配置？
 
-### Q: 如何支持新的 LLM 模型？
-
-A: 如果模型与现有提供商兼容，只需更改 `model_identifier`：
-```python
-models = [{
-    "client_type": "openai",
-    "model_identifier": "gpt-4-turbo",  # 新模型
-    "api_key": "..."
-}]
-```
+A: 在 extra_params 中设置：
+`python
+"extra_params": {"thinking": {"type": "enabled", "budget_tokens": 1024}}
+`
 
 ### Q: 客户端是否线程安全？
 
-A: `OpenAIChatClient` 使用 `threading.Lock` 保护客户端缓存，是线程安全的。
-
-### Q: 能否同时使用多个提供商？
-
-A: 可以。使用多模型配置和轮询策略：
-```python
-models = [
-    {"client_type": "openai", "model_identifier": "gpt-4", ...},
-    {"client_type": "gemini", "model_identifier": "gemini-pro", ...},
-]
-request = LLMRequest(model_set=models)  # 会轮流尝试
-```
+A: OpenAIChatClient 和 AnthropicChatClient 均使用 	hreading.Lock 保护缓存，是线程安全的。
 
 ---
 
@@ -367,5 +299,6 @@ request = LLMRequest(model_set=models)  # 会轮流尝试
 
 - [Request 模块](../request.md)
 - [Response 模块](../response.md)
+- [Embedding 模块](../embedding.md)
+- [Rerank 模块](../rerank.md)
 - [Policy 模块](../policy/README.md)
-

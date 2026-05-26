@@ -1,4 +1,4 @@
-﻿# Request 模块
+# Request 模块
 
 ## 概述
 
@@ -514,8 +514,11 @@ for query in queries:
 ## 相关文档
 
 - [Response 模块](./response.md) - 处理响应
+- [Context 模块](./context.md) - 上下文管理
+- [Embedding 模块](./embedding.md) - 向量嵌入
+- [Rerank 模块](./rerank.md) - 文档重排序
 - [Roles 模块](./roles.md) - 消息角色
 - [Payload 模块](./payload/README.md) - 消息负载
 - [Policy 模块](./policy/README.md) - 负载均衡策略
 - [Monitor 模块](./monitor.md) - 指标收集
-
+- [Types 模块](./types.md) - 类型定义

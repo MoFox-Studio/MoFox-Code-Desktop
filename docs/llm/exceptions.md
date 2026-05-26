@@ -11,6 +11,7 @@ BaseException
 └── RuntimeError
     └── LLMError（所有 LLM 异常的基类）
         ├── LLMConfigurationError
+        ├── LLMContextError
         ├── LLMResponseConsumedError
         ├── LLMRateLimitError
         ├── LLMTimeoutError
@@ -57,6 +58,33 @@ except LLMConfigurationError as e:
 ```
 
 ---
+
+---
+
+### LLMContextError
+
+```python
+class LLMContextError(LLMError):
+    """上下文结构错误。"""
+```
+
+当 payload 列表的结构不满足 LLM 对话约束时抛出。由 `LLMContextManager.validate_for_send()` 触发。
+
+**触发场景：**
+- 对话以 `assistant` 开头（缺少 `user`）
+- `TOOL_RESULT` 没有紧跟在含 `tool_calls` 的 `ASSISTANT` 之后
+- 含 `tool_calls` 的 `ASSISTANT` 后有未补齐的 `call_id`
+- `TOOL_RESULT` 后缺少 `ASSISTANT` 承接
+
+**使用示例：**
+```python
+from src.kernel.llm import LLMContextError
+
+try:
+    response = await request.send()
+except LLMContextError as e:
+    print(f"上下文结构错误: {e}")
+```
 
 ### LLMResponseConsumedError
 ```python
