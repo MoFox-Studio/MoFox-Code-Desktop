@@ -28,7 +28,7 @@ class RerankRequest:
 | request_name | str | 请求名称（用于日志和策略） |
 | query | str | 查询文本 |
 | documents | list[Any] | 待排序的文档列表 |
-| 	op_n | int \| None | 返回前 N 个结果，None 表示返回全部 |
+| top_n | int \| None | 返回前 N 个结果，None 表示返回全部 |
 | policy | Policy \| None | 负载均衡/重试策略，默认使用 create_default_policy() |
 | clients | ModelClientRegistry \| None | 模型客户端注册表 |
 
