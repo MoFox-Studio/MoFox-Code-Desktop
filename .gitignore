@@ -96,6 +96,7 @@ data/*
 config/*
 plugins/*
 skill/*
+typings/
 
 .agents/
 skills-lock.json
