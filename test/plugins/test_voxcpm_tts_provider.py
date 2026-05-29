@@ -98,6 +98,30 @@ async def test_voxcpm_provider_translates_voice_design_request() -> None:
 
 
 @pytest.mark.asyncio
+async def test_voxcpm_provider_appends_emotion_to_control_suffix() -> None:
+    fake = _FakeModel()
+    config = VoxCPMTTSProviderConfig()
+    config.voice.control = "warm"
+    provider = VoxCPMTTSProvider(
+        config=config,
+        logger=_Logger(),
+        model_factory=lambda _model_id, **_kwargs: fake,
+    )
+
+    response = await provider.synthesize(
+        _Request(
+            stream_id="demo",
+            text="hello",
+            emotion="happy",
+        )
+    )
+
+    assert fake.calls[0]["text"] == "(warm happy)hello"
+    assert response.metadata["control"] == "warm happy"
+    assert response.metadata["mode"] == "voice_design"
+
+
+@pytest.mark.asyncio
 async def test_voxcpm_provider_persists_base64_reference_audio(tmp_path) -> None:
     fake = _FakeModel()
     config = VoxCPMTTSProviderConfig()
