@@ -588,6 +588,35 @@ class LLMStatsCollector:
         sql += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
         return await self._db.execute_read(sql, (limit, offset))
 
+    async def list_requests_by_time_range(
+        self,
+        start_ts: float,
+        end_ts: float,
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """获取指定 Unix 时间戳范围内的请求记录明细。
+
+        Args:
+            start_ts: 起始 Unix 时间戳，单位为秒。
+            end_ts: 结束 Unix 时间戳，单位为秒。
+            limit: 返回数量上限。
+            offset: 偏移量。
+
+        Returns:
+            指定时间范围内按时间倒序排列的请求记录字典列表。
+        """
+        if not self.enabled:
+            return []
+
+        sql = """
+            SELECT * FROM llm_requests
+            WHERE timestamp >= ? AND timestamp <= ?
+            ORDER BY timestamp DESC
+            LIMIT ? OFFSET ?
+        """
+        return await self._db.execute_read(sql, (start_ts, end_ts, limit, offset))
+
     # ------------------------------------------------------------------
     # 查询 — 时间范围统计
     # ------------------------------------------------------------------
