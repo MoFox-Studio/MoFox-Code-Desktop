@@ -1,7 +1,10 @@
 """插件市场同步。
 
-在 Bot 最终进行插件发现与加载前，将插件市场订阅列表同步到本地插件目录。
-仅自动安装 / 更新 .mfp 插件，不会改动文件夹插件或普通 .zip 插件。
+在 Bot 最终进行插件发现与加载前：
+1. 将插件市场订阅列表同步到本地插件目录
+2. 检查本地已安装的市场 .mfp 插件是否有可更新版本
+
+不会改动文件夹插件或普通 .zip 插件。
 """
 
 from __future__ import annotations
@@ -132,6 +135,14 @@ class PluginMarketSyncService:
                     is_dependency=False,
                 )
 
+            if self._market.auto_update_mfp:
+                await self._refresh_installed_market_plugins(
+                    client,
+                    local_plugins,
+                    report,
+                    visited,
+                )
+
         logger.info(f"插件市场同步完成: {report.summary()}")
         return report
 
@@ -242,6 +253,44 @@ class PluginMarketSyncService:
             local_plugins.pop(plugin_id, None)
             report.removed += 1
             logger.info(f"严格模式：清理未订阅 mfp 插件 {plugin_id}")
+
+    async def _refresh_installed_market_plugins(
+        self,
+        client: httpx.AsyncClient,
+        local_plugins: dict[str, LocalPluginRecord],
+        report: PluginMarketSyncReport,
+        visited: set[str],
+    ) -> None:
+        """检查本地已安装的市场 .mfp 插件是否存在新版本。"""
+
+        for plugin_id, record in list(local_plugins.items()):
+            if plugin_id in visited:
+                continue
+            if record.path.suffix.lower() != ".mfp":
+                continue
+
+            try:
+                detail = await self._fetch_plugin_detail(client, plugin_id)
+            except Exception as exc:
+                report.errors.append(f"查询市场插件失败 {plugin_id}: {exc}")
+                continue
+
+            if detail is None:
+                logger.debug(f"本地 mfp 插件 {plugin_id} 未在市场中登记，跳过自动更新")
+                continue
+
+            if str(detail.get("status") or "").lower() != "published":
+                logger.info(f"本地 mfp 插件 {plugin_id} 当前非 published，跳过自动更新")
+                continue
+
+            await self._ensure_plugin(
+                client,
+                plugin_id,
+                local_plugins,
+                report,
+                visited,
+                is_dependency=False,
+            )
 
     async def _ensure_plugin(
         self,

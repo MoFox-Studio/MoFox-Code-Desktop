@@ -54,6 +54,13 @@ def _wav_base64() -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+def test_voxcpm_provider_config_exposes_prompt_injection_section() -> None:
+    config = VoxCPMTTSProviderConfig()
+
+    assert config.prompt.inject_into_voice_chatter is True
+    assert config.prompt.voice_chatter_guide == ""
+
+
 @pytest.mark.asyncio
 async def test_voxcpm_provider_translates_voice_design_request() -> None:
     fake = _FakeModel()
@@ -88,6 +95,30 @@ async def test_voxcpm_provider_translates_voice_design_request() -> None:
     with wave.open(io.BytesIO(raw), "rb") as wav_file:
         assert wav_file.getframerate() == 24000
         assert wav_file.getnchannels() == 1
+
+
+@pytest.mark.asyncio
+async def test_voxcpm_provider_appends_emotion_to_control_suffix() -> None:
+    fake = _FakeModel()
+    config = VoxCPMTTSProviderConfig()
+    config.voice.control = "warm"
+    provider = VoxCPMTTSProvider(
+        config=config,
+        logger=_Logger(),
+        model_factory=lambda _model_id, **_kwargs: fake,
+    )
+
+    response = await provider.synthesize(
+        _Request(
+            stream_id="demo",
+            text="hello",
+            emotion="happy",
+        )
+    )
+
+    assert fake.calls[0]["text"] == "(warm happy)hello"
+    assert response.metadata["control"] == "warm happy"
+    assert response.metadata["mode"] == "voice_design"
 
 
 @pytest.mark.asyncio
