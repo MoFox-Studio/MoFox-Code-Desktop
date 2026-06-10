@@ -203,6 +203,25 @@ class BaseAgent(ABC, LLMUsable):
             schemas.append(usable_cls.to_schema())
         return schemas
 
+    def _get_extra_usables(self) -> list[type[LLMUsable]]:
+        """获取实例级别的额外 usables（如动态 MCP 工具）。
+
+        子类可重写此方法注入运行时工具（如 MCP 工具类），
+        这些工具会被合并到 create_llm_request 和 execute_local_usable 的查找范围。
+
+        Returns:
+            list[type[LLMUsable]]: 额外的可用组件类列表，默认返回空列表。
+        """
+        return []
+
+    def _get_all_usables(self) -> list[type[LLMUsable]]:
+        """获取 Agent 全部 usables：类属性 usables + 实例级额外 usables。
+
+        Returns:
+            list[type[LLMUsable]]: 合并后的全部可用组件类列表。
+        """
+        return self.get_local_usables() + self._get_extra_usables()
+
     def create_llm_request(
         self,
         model_set: "ModelSet",
@@ -247,7 +266,7 @@ class BaseAgent(ABC, LLMUsable):
         )
 
         if with_usables:
-            request.add_payload(LLMPayload(ROLE.TOOL, cast(list[Any], self.get_local_usables())))
+            request.add_payload(LLMPayload(ROLE.TOOL, cast(list[Any], self._get_all_usables())))
 
         return request
 
@@ -275,7 +294,7 @@ class BaseAgent(ABC, LLMUsable):
             ValueError: ``usable_name`` 不在私有 usables 中，或组件类型不支持。
         """
         local_index: dict[str, type[LLMUsable]] = {}
-        for usable_cls in self.get_local_usables():
+        for usable_cls in self._get_all_usables():
             schema = usable_cls.to_schema()
             function_schema = schema.get("function", {})
             name = function_schema.get("name")
