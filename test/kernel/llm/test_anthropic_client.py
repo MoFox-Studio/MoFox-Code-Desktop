@@ -240,7 +240,8 @@ async def test_create_non_stream_returns_text_tool_calls_and_reasoning(monkeypat
             SimpleNamespace(type="thinking", thinking="reasoning", signature="sig_1"),
             SimpleNamespace(type="text", text="done"),
             SimpleNamespace(type="tool_use", id="toolu_1", name="lookup", input={"keyword": "neo"}),
-        ]
+        ],
+        usage=SimpleNamespace(input_tokens=150, output_tokens=80),
     )
     messages_api = _FakeMessagesAPI(create_response=response)
     fake_client = _FakeClient(messages_api)
@@ -269,6 +270,13 @@ async def test_create_non_stream_returns_text_tool_calls_and_reasoning(monkeypat
     assert create_params["tool_choice"] == {"type": "auto"}
     assert create_params["tools"][0]["name"] == "get_weather"
     assert create_params["tools"][0]["input_schema"]["required"] == ["city", "reason"]
+
+    # 验证 usage 返回值正确提取自 response.usage
+    assert usage is not None
+    assert usage["prompt_tokens"] == 150
+    assert usage["completion_tokens"] == 80
+    assert usage["total_tokens"] == 230
+    assert usage["completion_includes_reasoning"] is True
 
 
 @pytest.mark.asyncio
@@ -370,7 +378,10 @@ def test_to_anthropic_tool_does_not_inject_reason_when_execute_accepts_it() -> N
 async def test_create_stream_emits_text_reasoning_and_tool_deltas(monkeypatch: pytest.MonkeyPatch) -> None:
     """测试流式 create 路径。"""
     events = [
-        SimpleNamespace(type="message_start"),
+        SimpleNamespace(
+            type="message_start",
+            message=SimpleNamespace(usage=SimpleNamespace(input_tokens=200)),
+        ),
         SimpleNamespace(
             type="content_block_start",
             index=0,
@@ -411,6 +422,10 @@ async def test_create_stream_emits_text_reasoning_and_tool_deltas(monkeypatch: p
             index=2,
             delta=SimpleNamespace(type="text_delta", text="answer"),
         ),
+        SimpleNamespace(
+            type="message_delta",
+            usage=SimpleNamespace(output_tokens=120),
+        ),
         SimpleNamespace(type="message_stop"),
     ]
     messages_api = _FakeMessagesAPI(stream_events=events)
@@ -446,5 +461,11 @@ async def test_create_stream_emits_text_reasoning_and_tool_deltas(monkeypatch: p
     assert collected[4].tool_args_delta == '{"keyword": "n'
     assert collected[5].tool_args_delta == 'eo"}'
     assert collected[6].text_delta == "answer"
+    # 验证 message_delta 产出的 usage 事件包含正确的 total_tokens
+    usage_events = [e for e in collected if e.usage is not None]
+    assert len(usage_events) == 1
+    assert usage_events[0].usage["prompt_tokens"] == 200
+    assert usage_events[0].usage["completion_tokens"] == 120
+    assert usage_events[0].usage["total_tokens"] == 320
     stream_params = messages_api.stream_calls[0]
     assert stream_params["thinking"] == {"type": "adaptive", "display": "summarized"}

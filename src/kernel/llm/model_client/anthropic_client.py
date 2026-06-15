@@ -562,7 +562,7 @@ class AnthropicChatClient:
         reasoning_parts = _extract_anthropic_reasoning_parts(response)
         if not reasoning_parts and reasoning_content:
             reasoning_parts = [ReasoningText(reasoning_content)]
-        usage = _extract_anthropic_usage(response)
+        usage = _extract_anthropic_usage(getattr(response, "usage", None))
         return message_text, tool_calls, None, reasoning_parts or None, usage
 
     async def _create_stream(
@@ -607,6 +607,7 @@ class AnthropicChatClient:
                             input_usage["completion_tokens"] = output_tokens
                             # Anthropic output_tokens 已包含 reasoning tokens
                             input_usage["completion_includes_reasoning"] = True
+                            input_usage["total_tokens"] = input_usage.get("prompt_tokens", 0) + output_tokens
                         yield StreamEvent(usage=dict(input_usage) if input_usage else None)
                         continue
 

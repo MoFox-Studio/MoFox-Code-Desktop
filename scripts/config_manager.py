@@ -398,7 +398,7 @@ class ConfigManager:
             
             # 检查max_tokens值
             tokens = task_config.get("max_tokens")
-            if tokens is not None and (not isinstance(tokens, int) or tokens < 1 or tokens > 8000):
+            if tokens is not None and (not isinstance(tokens, int) or tokens < 1):
                 error_fields.append(3)  # max_tokens列索引
                 if task_name not in problematic_items['tasks']:
                     problematic_items['tasks'][task_name] = {
@@ -408,7 +408,7 @@ class ConfigManager:
                 else:
                     problematic_items['tasks'][task_name]['fields'] = error_fields
                     problematic_items['tasks'][task_name]['invalid_tokens'] = str(tokens)
-                errors.append(f"任务 '{task_name}' 的max_tokens值无效 (应在1-8000之间)")
+                errors.append(f"任务 '{task_name}' 的max_tokens值无效 (必须是大于0的整数)")
         
         # 高亮有问题的项目
         for item in self.api_tree.get_children():
@@ -1015,7 +1015,7 @@ context_reserve_tokens = 512  # 上下文固定预留token
         temp_entry.insert(0, str(task_config.get("temperature", "")))
         temp_entry.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
         
-        ttk.Label(dialog, text="最大Token数(1-8000):").grid(row=3, column=0, padx=5, pady=5, sticky=tk.E)
+        ttk.Label(dialog, text="最大Token数:").grid(row=3, column=0, padx=5, pady=5, sticky=tk.E)
         tokens_entry = ttk.Entry(dialog)
         tokens_entry.insert(0, str(task_config.get("max_tokens", "")))
         tokens_entry.grid(row=3, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
@@ -1047,8 +1047,8 @@ context_reserve_tokens = 512  # 上下文固定预留token
                 
                 # Validate max tokens
                 tokens = int(tokens_entry.get()) if tokens_entry.get() else None
-                if tokens is not None and (tokens < 1 or tokens > 8000):
-                    raise ValueError("最大Token数必须在1-8000之间")
+                if tokens is not None and (tokens < 1):
+                    raise ValueError("最大Token数必须大于0")
                 
                 # Get selected models from both listboxes
                 model_list = list(selected_listbox.get(0, tk.END))
