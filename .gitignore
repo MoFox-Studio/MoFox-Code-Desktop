@@ -98,13 +98,7 @@ plugins/*
 skill/*
 typings/
 
+debug/
+
 .agents/
 skills-lock.json
-
-!plugins/default_chatter/
-!plugins/onebot_adapter/
-!plugins/booku_memory/
-!plugins/emoji_sender/
-!plugins/perm_plugin/
-!plugins/utility_commands/
-!plugins/skill_manager/

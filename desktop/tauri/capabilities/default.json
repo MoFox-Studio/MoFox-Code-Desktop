@@ -1,0 +1,8 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for MoFox Code Desktop",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

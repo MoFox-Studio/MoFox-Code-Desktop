@@ -1,0 +1,35 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
+  "productName": "MoFox Code",
+  "version": "0.1.0",
+  "identifier": "com.mofox.code.desktop",
+  "build": {
+    "beforeDevCommand": "cd ../../plugins/coding_agent_webui/frontend && npm run dev",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": "cd ../../plugins/coding_agent_webui/frontend && npm run build",
+    "frontendDist": "../../plugins/coding_agent_webui/frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "MoFox Code",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ]
+  }
+}
