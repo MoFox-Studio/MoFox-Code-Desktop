@@ -843,7 +843,7 @@ class CoreConfig(ConfigBase):
             depends_value=True,
         )
         http_router_port: int = Field(
-            default=8000,
+            default=8200,
             description="HTTP 路由监听端口",
             label="监听端口",
             tag="network",

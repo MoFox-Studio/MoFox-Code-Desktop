@@ -1,5 +1,5 @@
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -21,9 +21,20 @@ fn project_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Python 可执行文件路径
-fn python_exe() -> PathBuf {
-    project_root().join(".venv").join("Scripts").join("python.exe")
+/// 查找后端可执行文件（PyInstaller 打包 > dev Python 回退）
+fn find_backend_exe() -> (PathBuf, PathBuf) {
+    // 生产模式：查找与 Tauri exe 同目录的 mofox-backend.exe
+    if let Ok(exe_path) = std::env::current_exe() {
+        let exe_dir = exe_path.parent().unwrap_or_else(|| Path::new("."));
+        let bundled_dir = exe_dir.join("mofox-backend");
+        let bundled = bundled_dir.join("mofox-backend.exe");
+        if bundled.exists() {
+            return (bundled, bundled_dir);
+        }
+    }
+    // 开发模式：使用 .venv python + 项目根目录
+    let project = project_root();
+    (project.join(".venv").join("Scripts").join("python.exe"), project)
 }
 
 /// 向导配置临时文件路径
@@ -53,19 +64,30 @@ fn start_backend(state: tauri::State<'_, AppState>) -> Result<String, String> {
         }
     }
 
-    let python = python_exe();
-    if !python.exists() {
+    let (backend_path, work_dir) = find_backend_exe();
+    if !backend_path.exists() {
         return Err(format!(
-            "Python executable not found: {}",
-            python.display()
+            "Backend executable not found: {}",
+            backend_path.display()
         ));
     }
 
-    let mut cmd = Command::new(&python);
-    cmd.args(["-m", "desktop.launcher"])
-        .current_dir(project_root())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    let is_bundled = backend_path.extension().map_or(false, |e| e == "exe")
+        && !backend_path.to_string_lossy().contains("python");
+    let mut cmd = if is_bundled {
+        let mut c = Command::new(&backend_path);
+        c.current_dir(&work_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        c
+    } else {
+        let mut c = Command::new(&backend_path);
+        c.args(["-m", "desktop.launcher"])
+            .current_dir(&work_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        c
+    };
 
     // 如果存在向导配置临时文件，传递 --wizard-config
     let wiz_path = wizard_config_path();

@@ -27,11 +27,17 @@ if str(_proj_root) not in sys.path:
     sys.path.insert(0, str(_proj_root))
 
 
-async def start_bot(config_dir: str = "config") -> None:
+async def start_bot(
+    config_dir: str = "config",
+    log_dir: str = "logs",
+    plugins_dir: str = "plugins",
+) -> None:
     """启动 Bot 后端。
 
     Args:
         config_dir: 配置目录路径。
+        log_dir: 日志目录路径。
+        plugins_dir: 插件目录路径。
     """
     from src.app.runtime.bot import Bot
     from src.app.runtime.console_ui import UILevel
@@ -45,8 +51,8 @@ async def start_bot(config_dir: str = "config") -> None:
 
     bot = Bot(
         config_path=config_path,
-        plugins_dir="plugins",
-        log_dir="logs",
+        plugins_dir=plugins_dir,
+        log_dir=log_dir,
         ui_level=UILevel.MINIMAL,
     )
 
