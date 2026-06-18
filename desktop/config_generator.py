@@ -161,8 +161,8 @@ def _generate_model_toml(wizard_config: dict[str, Any], path: Path) -> None:
                 "base_url": raw_url if raw_url else _base_url_defaults.get(ct, ""),
                 "api_key": p.get("api_key", ""),
                 "client_type": ct,
-                "max_retry": 2,
-                "timeout": 30,
+                "max_retry": 2,   # 向导默认值：合理的基础重试次数
+                "timeout": 30,    # 向导默认值：30秒超时，适配多数 API 响应时间
                 "retry_interval": 10,
             })
 
@@ -181,7 +181,8 @@ def _generate_model_toml(wizard_config: dict[str, Any], path: Path) -> None:
             })
 
         # 角色 → 任务映射（roles 中的值已经是 "ProviderName/ModelId" 格式的 name）
-        fallback = data["models"][0]["name"] if data["models"] else "OpenAI/gpt-4o"
+        # 从已生成的模型列表中获取第一个作为 fallback，避免硬编码模型名
+        fallback = data["models"][0]["name"] if data["models"] else ""
         main_name = roles.get("main", fallback)
         coder_name = roles.get("coder", main_name)
         researcher_name = roles.get("researcher", main_name)
@@ -253,7 +254,7 @@ def _generate_model_toml(wizard_config: dict[str, Any], path: Path) -> None:
         "voice": _make_task(main_name),
         "video": _make_task(main_name),
         "tool_use": _make_task(main_name),
-        "embedding": {"model_list": [main_name], "max_tokens": 800, "temperature": 0.7, "concurrency_count": 1, "embedding_dimension": 1024},
+        "embedding": {"model_list": [], "max_tokens": 800, "temperature": 0.7, "concurrency_count": 1, "embedding_dimension": 1024},
     }
 
     toml_content = _render_toml_with_signature(ModelConfig, data)
@@ -346,7 +347,7 @@ def _generate_coding_agent_config(
     # 模型名统一使用 "ProviderName/ModelId" 格式，与 model.toml 中的 name 一致
     if "roles" in wizard_config:
         # 新格式：roles.main 已经是 "ProviderName/ModelId"
-        main_model_name = wizard_config["roles"].get("main", "OpenAI/gpt-4o")
+        main_model_name = wizard_config["roles"].get("main", "")
     else:
         # 旧格式兼容
         api_provider = wizard_config.get("api_provider", {})

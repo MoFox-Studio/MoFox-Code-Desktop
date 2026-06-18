@@ -84,7 +84,7 @@ def _maybe_start_setup_server(wizard_config: dict, config_dir: str) -> None:
     from desktop.setup_server import run_setup_server
 
     try:
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             run_setup_server(config_dir=config_dir)
         )
     except KeyboardInterrupt:

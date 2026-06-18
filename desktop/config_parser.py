@@ -52,6 +52,7 @@ def parse_configs(config_dir: str = "config") -> dict[str, Any]:
         models_out.append({
             "model_id": m.get("model_identifier", ""),
             "api_provider": m.get("api_provider", api_providers[0]["name"] if api_providers else ""),
+            "max_context": m.get("max_context", ""),
         })
 
     # ── Roles ──────────────────────────────────

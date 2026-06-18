@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import SplashScreen from './components/SplashScreen';
 import SetupWizard from './components/SetupWizard';
 import SettingsModal from './components/SettingsModal';
@@ -31,6 +32,14 @@ function App() {
   const [appState, setAppState] = useState<AppState>('booting');
   const [activePort, setActivePort] = useState<number>(8681);
   const [showSettings, setShowSettings] = useState(false);
+  const [closing, setClosing] = useState(false);
+
+  useEffect(() => {
+    const unlisten = listen('closing-backend', () => {
+      setClosing(true);
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, []);
 
   useEffect(() => {
     const handleMessage = (e: MessageEvent) => {
@@ -60,6 +69,8 @@ function App() {
         
         if (status === 'running' || status === 'exited:0') {
           try {
+            // Fallback 端口列表：实际端口由 config/webui 决定（默认 8681），
+            // 此处扫描仅用于多实例或端口被占用时的兜底发现。
             const PORTS = [8681, 8682, 8683, 8684, 8685];
             
             const checkPort = async (port: number) => {
@@ -105,19 +116,15 @@ function App() {
     } catch (e) {
       console.error("Failed to restart backend:", e);
     }
-    
+
+    // 无论是否来自设置弹窗，都重启并重新加载
     if (showSettings) {
       setShowSettings(false);
-      setAppState('booting');
-      setTimeout(() => {
-        window.location.reload();
-      }, 2000);
-    } else {
-      setAppState('booting');
-      setTimeout(() => {
-        window.location.reload();
-      }, 2000);
     }
+    setAppState('booting');
+    setTimeout(() => {
+      window.location.reload();
+    }, 2000);
   };
 
   return (
@@ -158,7 +165,7 @@ function App() {
                 }}
               >
                 <div 
-                  className="w-full max-w-4xl h-[85vh] bg-white dark:bg-gray-900 rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200" 
+                  className="w-[95vw] max-w-6xl h-[90vh] bg-white dark:bg-gray-900 rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200" 
                   onPointerDown={(e) => e.stopPropagation()}
                 >
                   <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800/50 shrink-0">
@@ -178,6 +185,14 @@ function App() {
             )}
           </div>
         </>
+      )}
+      {closing && (
+        <div className="fixed inset-0 z-[99999] bg-black/60 backdrop-blur-sm flex items-center justify-center">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl px-8 py-6 flex flex-col items-center gap-3 animate-in fade-in zoom-in-95 duration-200">
+            <div className="w-8 h-8 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin" />
+            <p className="text-gray-700 dark:text-gray-200 text-sm font-medium">正在关闭后端服务...</p>
+          </div>
+        </div>
       )}
     </div>
   );

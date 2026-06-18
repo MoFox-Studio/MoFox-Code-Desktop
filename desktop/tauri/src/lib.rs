@@ -1,8 +1,9 @@
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 // ─── App State ──────────────────────────────────────────────
 
@@ -166,6 +167,8 @@ fn get_backend_status(state: tauri::State<'_, AppState>) -> Result<String, Strin
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let closing = std::sync::Arc::new(AtomicBool::new(false));
+
     tauri::Builder::default()
         .manage(AppState {
             backend_process: Mutex::new(None),
@@ -186,17 +189,60 @@ pub fn run() {
             submit_setup,
             get_backend_status,
         ])
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                // 窗口关闭时优雅终止后端
-                if let Some(state) = window.try_state::<AppState>() {
-                    if let Ok(mut proc) = state.backend_process.lock() {
-                        if let Some(ref mut child) = *proc {
-                            eprintln!("[Tauri] Closing window — killing backend process");
-                            child.kill().ok();
-                            child.wait().ok();
+        .on_window_event({
+            let closing = closing.clone();
+            move |window, event| {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    // 第二次触发（来自后台线程的 close()），直接放行
+                    if closing.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    closing.store(true, Ordering::SeqCst);
+
+                    if let Some(state) = window.try_state::<AppState>() {
+                        if let Ok(mut proc) = state.backend_process.lock() {
+                            if proc.is_some() {
+                                api.prevent_close();
+
+                                // 通知前端显示"正在关闭"提示
+                                let _ = window.emit("closing-backend", ());
+                                eprintln!("[Tauri] Closing window — waiting up to 3s for backend to exit gracefully");
+
+                                let mut backend = proc.take().unwrap();
+                                drop(proc);
+                                let win = window.clone();
+
+                                std::thread::spawn(move || {
+                                    let mut grace_exited = false;
+                                    let start = std::time::Instant::now();
+                                    let timeout = std::time::Duration::from_secs(3);
+                                    while start.elapsed() < timeout {
+                                        match backend.try_wait() {
+                                            Ok(Some(_)) => {
+                                                grace_exited = true;
+                                                break;
+                                            }
+                                            Ok(None) => {
+                                                std::thread::sleep(std::time::Duration::from_millis(100));
+                                            }
+                                            Err(_) => break,
+                                        }
+                                    }
+                                    if !grace_exited {
+                                        eprintln!("[Tauri] Backend did not exit in 3s, killing...");
+                                        backend.kill().ok();
+                                        backend.wait().ok();
+                                    } else {
+                                        eprintln!("[Tauri] Backend exited gracefully");
+                                    }
+                                    // 触发真正的关闭（closing=true，CloseRequested 直接放行）
+                                    let _ = win.close();
+                                });
+                                return;
+                            }
                         }
                     }
+                    // 没有后端进程或状态异常，直接关闭
                 }
             }
         })
