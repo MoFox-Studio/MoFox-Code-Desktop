@@ -26,9 +26,11 @@ interface SetupWizardProps {
 
 /* ── 数据结构 ──────────────────────────────────────────── */
 
+type ProviderClientType = "openai" | "anthropic";
+
 interface Provider {
   name: string;
-  client_type: string;
+  client_type: ProviderClientType;
   api_key: string;
   base_url: string;
   max_retry?: number;
@@ -52,6 +54,23 @@ interface ModelEntry {
 const BASE_URL_DEFAULTS: Record<string, string> = {
   openai: "https://api.openai.com/v1",
   anthropic: "https://api.anthropic.com",
+};
+
+const PROVIDER_TYPE_OPTIONS: Array<{ label: string; value: ProviderClientType }> = [
+  { label: "OpenAI 兼容", value: "openai" },
+  { label: "Anthropic", value: "anthropic" },
+];
+
+const QUICK_PROVIDER_TYPES = PROVIDER_TYPE_OPTIONS;
+
+const normalizeProviderClientType = (value: unknown): ProviderClientType => {
+  switch (value) {
+    case "anthropic":
+      return value;
+    case "openai":
+    default:
+      return "openai";
+  }
 };
 
 const createModelEntry = (
@@ -203,8 +222,36 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
   const modelName = (m: ModelEntry) => `${m.api_provider}/${m.model_id}`;
   const allModelNames = models.map(modelName);
   const firstModelName = allModelNames[0] ?? "";
+  const resolveRoleModelName = (value: string, fallback: string) => {
+    const normalized = value.trim();
+    if (!normalized) {
+      return fallback;
+    }
+    if (allModelNames.includes(normalized)) {
+      return normalized;
+    }
 
-  const effectiveChat = chatModelName || firstModelName;
+    const modelId =
+      normalized.includes("/")
+        ? normalized.split("/").slice(1).join("/").trim()
+        : normalized;
+    if (!modelId) {
+      return fallback;
+    }
+
+    const suffix = `/${modelId}`;
+    const matches = allModelNames.filter(
+      (name) => name === modelId || name.endsWith(suffix),
+    );
+    return matches.length === 1 ? matches[0] : fallback;
+  };
+
+  const selectedChatModelName = resolveRoleModelName(chatModelName, firstModelName);
+  const effectiveChat = selectedChatModelName || firstModelName;
+  const selectedCoderModelName = resolveRoleModelName(coderModelName, effectiveChat);
+  const selectedResearcherModelName = resolveRoleModelName(researcherModelName, effectiveChat);
+  const selectedReviewerModelName = resolveRoleModelName(reviewerModelName, effectiveChat);
+  const selectedTitleModelName = resolveRoleModelName(titleModelName, effectiveChat);
 
   const applyModels = (nextModels: ModelEntry[]) => {
     setModels(nextModels);
@@ -227,13 +274,17 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
   };
 
   const updateProvider = (i: number, patch: Partial<Provider>) => {
+    const normalizedPatch =
+      patch.client_type === undefined
+        ? patch
+        : { ...patch, client_type: normalizeProviderClientType(patch.client_type) };
     const next = [...providers];
-    next[i] = { ...next[i], ...patch };
-    if (patch.name !== undefined) {
+    next[i] = { ...next[i], ...normalizedPatch };
+    if (normalizedPatch.name !== undefined) {
       const oldName = providers[i].name;
       setModels((prev) =>
         prev.map((m) =>
-          m.api_provider === oldName ? { ...m, api_provider: patch.name! } : m,
+          m.api_provider === oldName ? { ...m, api_provider: normalizedPatch.name! } : m,
         ),
       );
     }
@@ -360,7 +411,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
 
       const impProviders: Provider[] = (d.api_providers ?? []).map((p: any) => ({
         name: p.name ?? "",
-        client_type: (p.client_type ?? "openai") as "openai" | "anthropic",
+        client_type: normalizeProviderClientType(p.client_type),
         api_key: p.api_key ?? "",
         base_url: p.base_url ?? "",
         max_retry: p.max_retry ?? 2,
@@ -439,11 +490,11 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
     setIsSubmitting(true);
     setError("");
 
-    const chat = chatModelName || firstModelName;
-    const coder = coderModelName || chat;
-    const researcher = researcherModelName || chat;
-    const reviewer = reviewerModelName || chat;
-    const title = titleModelName || chat;
+    const chat = resolveRoleModelName(chatModelName, firstModelName);
+    const coder = resolveRoleModelName(coderModelName, chat);
+    const researcher = resolveRoleModelName(researcherModelName, chat);
+    const reviewer = resolveRoleModelName(reviewerModelName, chat);
+    const title = resolveRoleModelName(titleModelName, chat);
 
     try {
       const parsedMcp = mcpServers
@@ -488,7 +539,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
       const configPayload = {
         api_providers: providers.map((p) => ({
           name: p.name.trim(),
-          client_type: p.client_type,
+          client_type: normalizeProviderClientType(p.client_type),
           api_key: p.api_key.trim(),
           base_url: p.base_url.trim() || (BASE_URL_DEFAULTS[p.client_type] ?? ""),
           max_retry: p.max_retry ?? 2,
@@ -733,14 +784,13 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
                         <div className="bg-gray-50 dark:bg-gray-900/50 rounded-2xl p-6 border border-gray-100 dark:border-gray-800/60 space-y-5 animate-in zoom-in-95 duration-200">
                           
                           <div className="flex items-center gap-2 mb-2">
-                            {['OpenAI 兼容', 'Anthropic', '自定义'].map(type => {
-                              const typeMap: Record<string, string> = { 'OpenAI 兼容': 'openai', 'Anthropic': 'anthropic', '自定义': 'custom' };
-                              const isActive = providers[editingProvider].client_type === typeMap[type];
+                            {QUICK_PROVIDER_TYPES.map((type) => {
+                              const isActive = providers[editingProvider].client_type === type.value;
                               return (
-                                <button key={type} onClick={() => updateProvider(editingProvider, { client_type: typeMap[type] })} className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${
+                                <button key={type.value} onClick={() => updateProvider(editingProvider, { client_type: type.value })} className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${
                                   isActive ? 'bg-white dark:bg-gray-800 shadow-sm border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white' : 'border-transparent text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-800'
                                 }`}>
-                                  {type}
+                                  {type.label}
                                 </button>
                               );
                             })}
@@ -753,11 +803,14 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
                             </div>
                             <div className="space-y-1.5">
                               <label className="text-xs font-semibold text-gray-900 dark:text-white">客户端类型</label>
-                              <select className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm bg-white dark:bg-gray-950 focus:ring-2 focus:ring-blue-500/50 outline-none appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M5%208l5%205%205-5%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E')] bg-[length:20px] bg-[position:right_0.5rem_center] bg-no-repeat pr-10" value={providers[editingProvider].client_type} onChange={(e) => updateProvider(editingProvider, { client_type: e.target.value })}>
-                                <option value="openai">OpenAI 兼容</option>
-                                <option value="anthropic">Anthropic</option>
-                                <option value="google">Google</option>
+                              <select className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm bg-white dark:bg-gray-950 focus:ring-2 focus:ring-blue-500/50 outline-none appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M5%208l5%205%205-5%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E')] bg-[length:20px] bg-[position:right_0.5rem_center] bg-no-repeat pr-10" value={providers[editingProvider].client_type} onChange={(e) => updateProvider(editingProvider, { client_type: normalizeProviderClientType(e.target.value) })}>
+                                {PROVIDER_TYPE_OPTIONS.map((option) => (
+                                  <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
                               </select>
+                              <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                                OpenRouter、硅基流动等第三方兼容平台请选择 `OpenAI 兼容`，并在下方填写对应 Base URL。
+                              </p>
                             </div>
                           </div>
 
@@ -899,7 +952,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
                         <label className="text-sm font-semibold text-gray-900 dark:text-white">主干模型 (Main/Chat)</label>
                         <p className="text-[11px] text-gray-500">负责基础的闲聊和大部分综合任务。</p>
                       </div>
-                      <select className="w-56 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-sm font-medium outline-none shadow-sm appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M5%208l5%205%205-5%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E')] bg-[length:20px] bg-[position:right_0.5rem_center] bg-no-repeat pr-8" value={chatModelName || firstModelName} onChange={(e) => setChatModelName(e.target.value)}>
+                      <select className="w-56 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-sm font-medium outline-none shadow-sm appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M5%208l5%205%205-5%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E')] bg-[length:20px] bg-[position:right_0.5rem_center] bg-no-repeat pr-8" value={selectedChatModelName} onChange={(e) => setChatModelName(e.target.value)}>
                         {allModelNames.map((n) => <option key={n} value={n}>{n}</option>)}
                       </select>
                     </div>
@@ -911,7 +964,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
                         <label className="text-sm font-semibold text-gray-900 dark:text-white">代码模型 (Coder)</label>
                         <p className="text-[11px] text-gray-500">负责编写核心代码，推荐使用能力最强的模型。</p>
                       </div>
-                      <select className="w-56 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-sm font-medium outline-none shadow-sm appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M5%208l5%205%205-5%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E')] bg-[length:20px] bg-[position:right_0.5rem_center] bg-no-repeat pr-8" value={coderModelName || effectiveChat} onChange={(e) => setCoderModelName(e.target.value)}>
+                      <select className="w-56 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-sm font-medium outline-none shadow-sm appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M5%208l5%205%205-5%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E')] bg-[length:20px] bg-[position:right_0.5rem_center] bg-no-repeat pr-8" value={selectedCoderModelName} onChange={(e) => setCoderModelName(e.target.value)}>
                         {allModelNames.map((n) => <option key={n} value={n}>{n}</option>)}
                       </select>
                     </div>
@@ -923,7 +976,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
                         <label className="text-sm font-medium text-gray-800 dark:text-gray-200">研究员 (Researcher)</label>
                         <p className="text-[11px] text-gray-500">负责代码搜索、网络检索与问题研究。</p>
                       </div>
-                      <select className="w-56 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-sm outline-none shadow-sm appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M5%208l5%205%205-5%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E')] bg-[length:20px] bg-[position:right_0.5rem_center] bg-no-repeat pr-8" value={researcherModelName || effectiveChat} onChange={(e) => setResearcherModelName(e.target.value)}>
+                      <select className="w-56 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-sm outline-none shadow-sm appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M5%208l5%205%205-5%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E')] bg-[length:20px] bg-[position:right_0.5rem_center] bg-no-repeat pr-8" value={selectedResearcherModelName} onChange={(e) => setResearcherModelName(e.target.value)}>
                         {allModelNames.map((n) => <option key={n} value={n}>{n}</option>)}
                       </select>
                     </div>
@@ -935,7 +988,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
                         <label className="text-sm font-medium text-gray-800 dark:text-gray-200">审查员 (Reviewer)</label>
                         <p className="text-[11px] text-gray-500">负责代码变更的自动审核和问题提示。</p>
                       </div>
-                      <select className="w-56 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-sm outline-none shadow-sm appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M5%208l5%205%205-5%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E')] bg-[length:20px] bg-[position:right_0.5rem_center] bg-no-repeat pr-8" value={reviewerModelName || effectiveChat} onChange={(e) => setReviewerModelName(e.target.value)}>
+                      <select className="w-56 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-sm outline-none shadow-sm appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M5%208l5%205%205-5%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E')] bg-[length:20px] bg-[position:right_0.5rem_center] bg-no-repeat pr-8" value={selectedReviewerModelName} onChange={(e) => setReviewerModelName(e.target.value)}>
                         {allModelNames.map((n) => <option key={n} value={n}>{n}</option>)}
                       </select>
                     </div>
@@ -947,7 +1000,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
                         <label className="text-sm font-medium text-gray-800 dark:text-gray-200">标题生成 (Title)</label>
                         <p className="text-[11px] text-gray-500">用于总结对话意图，生成会话标签，可使用轻量模型。</p>
                       </div>
-                      <select className="w-56 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-sm outline-none shadow-sm appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M5%208l5%205%205-5%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E')] bg-[length:20px] bg-[position:right_0.5rem_center] bg-no-repeat pr-8" value={titleModelName || effectiveChat} onChange={(e) => setTitleModelName(e.target.value)}>
+                      <select className="w-56 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-sm outline-none shadow-sm appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M5%208l5%205%205-5%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E')] bg-[length:20px] bg-[position:right_0.5rem_center] bg-no-repeat pr-8" value={selectedTitleModelName} onChange={(e) => setTitleModelName(e.target.value)}>
                         {allModelNames.map((n) => <option key={n} value={n}>{n}</option>)}
                       </select>
                     </div>
