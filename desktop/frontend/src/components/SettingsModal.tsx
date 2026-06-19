@@ -6,6 +6,66 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
+const buildExtraParamsTextMap = (models: any[] = []) =>
+  Object.fromEntries(
+    models.map((model, index) => [
+      index,
+      JSON.stringify(model?.extra_params ?? {}, null, 2),
+    ]),
+  );
+
+const normalizeModels = (models: any[] = []) =>
+  models.map((model) => ({
+    model_id: model?.model_id ?? '',
+    api_provider: model?.api_provider ?? '',
+    max_context: model?.max_context ?? '',
+    price_in: model?.price_in ?? '',
+    price_out: model?.price_out ?? '',
+    cache_hit_price_in: model?.cache_hit_price_in ?? '',
+    force_stream_mode: model?.force_stream_mode === true,
+    tool_call_compat: model?.tool_call_compat === true,
+    anti_truncation: model?.anti_truncation === true,
+    extra_params: model?.extra_params ?? {},
+  }));
+
+const parseMaxContextValue = (value: unknown) => {
+  if (typeof value === 'string' && value.toLowerCase().endsWith('k')) {
+    const num = parseFloat(value.slice(0, -1));
+    return Number.isNaN(num) ? undefined : num * 1024;
+  }
+  if (typeof value === 'string') {
+    const num = parseInt(value, 10);
+    return Number.isNaN(num) ? undefined : num;
+  }
+  return typeof value === 'number' ? value : undefined;
+};
+
+const parseNumberValue = (value: unknown, fallback = 0) => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : fallback;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return fallback;
+    }
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+  return fallback;
+};
+
+const parseNullableNumberValue = (value: unknown) => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'string' && !value.trim()) {
+    return null;
+  }
+  const parsed = parseNumberValue(value, Number.NaN);
+  return Number.isNaN(parsed) ? null : parsed;
+};
+
 const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
   const [activeTab, setActiveTab] = useState('general');
   const [config, setConfig] = useState<any>(null);
@@ -15,6 +75,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
   const [saving, setSaving] = useState(false);
   const [version, setVersion] = useState<Record<string, string> | null>(null);
   const [expandedModel, setExpandedModel] = useState<number | null>(null);
+  const [modelExtraParamsText, setModelExtraParamsText] = useState<Record<number, string>>({});
 
   useEffect(() => {
     fetch(`http://127.0.0.1:${port}/api/version`)
@@ -30,7 +91,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
         if (data.status === 'error') {
           setError(data.message);
         } else {
-          setConfig(data);
+          const normalized = {
+            ...data,
+            models: normalizeModels(data.models || []),
+          };
+          setConfig(normalized);
+          setModelExtraParamsText(buildExtraParamsTextMap(normalized.models));
         }
         setLoading(false);
       })
@@ -44,19 +110,35 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
   const handleSave = async () => {
     setSaving(true);
     setSaveSuccess(false);
+    setError('');
     try {
       const parsedConfig = JSON.parse(JSON.stringify(config));
       if (parsedConfig.models) {
-        parsedConfig.models = parsedConfig.models.map((m: any) => {
-          let mc = m.max_context;
-          if (typeof mc === 'string' && mc.toLowerCase().endsWith('k')) {
-            const num = parseFloat(mc.slice(0, -1));
-            if (!isNaN(num)) mc = num * 1024;
-          } else if (typeof mc === 'string') {
-            const num = parseInt(mc, 10);
-            mc = isNaN(num) ? undefined : num;
+        parsedConfig.models = parsedConfig.models.map((m: any, index: number) => {
+          const rawExtraParams =
+            modelExtraParamsText[index] ??
+            JSON.stringify(m.extra_params ?? {}, null, 2);
+          let extraParams = {};
+          if (rawExtraParams.trim()) {
+            try {
+              extraParams = JSON.parse(rawExtraParams);
+            } catch {
+              throw new Error(
+                `模型 ${m.model_id || `#${index + 1}`} 的 Extra Params 不是有效 JSON`,
+              );
+            }
           }
-          return { ...m, max_context: mc };
+          return {
+            ...m,
+            max_context: parseMaxContextValue(m.max_context),
+            price_in: parseNumberValue(m.price_in, 0),
+            price_out: parseNumberValue(m.price_out, 0),
+            cache_hit_price_in: parseNullableNumberValue(m.cache_hit_price_in),
+            force_stream_mode: m.force_stream_mode === true,
+            tool_call_compat: m.tool_call_compat === true,
+            anti_truncation: m.anti_truncation === true,
+            extra_params: extraParams,
+          };
         });
       }
 
@@ -74,9 +156,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
           onClose();
         }, 1500);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to save settings:", err);
-      setError("保存设置失败！");
+      setError(err?.message || "保存设置失败！");
     } finally {
       setSaving(false);
     }
@@ -108,6 +190,68 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
       newConfig.models[index][field] = value;
       return newConfig;
     });
+  };
+
+  const addModel = () => {
+    const defaultProvider = config?.api_providers?.[0]?.name || '';
+    const nextModels = [
+      ...(config?.models || []),
+      {
+        model_id: 'new-model',
+        api_provider: defaultProvider,
+        max_context: '',
+        price_in: '',
+        price_out: '',
+        cache_hit_price_in: '',
+        force_stream_mode: false,
+        tool_call_compat: false,
+        anti_truncation: false,
+        extra_params: {},
+      },
+    ];
+    setConfig((prev: any) => ({ ...prev, models: nextModels }));
+    setModelExtraParamsText(buildExtraParamsTextMap(nextModels));
+  };
+
+  const removeModel = (index: number) => {
+    const nextModels = (config?.models || []).filter((_: any, modelIndex: number) => modelIndex !== index);
+    setConfig((prev: any) => ({ ...prev, models: nextModels }));
+    setModelExtraParamsText(buildExtraParamsTextMap(nextModels));
+    setExpandedModel((prev) => {
+      if (prev === null) {
+        return prev;
+      }
+      if (prev === index) {
+        return null;
+      }
+      return prev > index ? prev - 1 : prev;
+    });
+  };
+
+  const updateModelExtraParamsText = (index: number, value: string) => {
+    setModelExtraParamsText((prev) => ({ ...prev, [index]: value }));
+    if (!value.trim()) {
+      updateModel(index, 'extra_params', {});
+      return;
+    }
+    try {
+      updateModel(index, 'extra_params', JSON.parse(value));
+    } catch {
+      // 允许临时输入无效 JSON，保存时统一校验
+    }
+  };
+
+  const hasInvalidExtraParams = (index: number) => {
+    const rawValue = modelExtraParamsText[index] ?? '{}';
+    if (!rawValue.trim()) {
+      return false;
+    }
+    try {
+      JSON.parse(rawValue);
+      return false;
+    } catch {
+      return true;
+    }
   };
 
   const updateMcpServer = (index: number, field: string, value: any) => {
@@ -277,22 +421,21 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
                 <div className="space-y-3 pt-4 border-t border-gray-100 dark:border-gray-800">
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-gray-900 dark:text-white">可用模型列表</h3>
-                    <button onClick={() => setConfig((prev: any) => ({ ...prev, models: [...(prev.models || []), { model_id: 'new-model', api_provider: prev.api_providers?.[0]?.name || '' }] }))} className="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400 font-medium hover:underline px-2 bg-blue-50 dark:bg-blue-900/30 py-1 rounded">
+                    <button onClick={addModel} className="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400 font-medium hover:underline px-2 bg-blue-50 dark:bg-blue-900/30 py-1 rounded">
                       <Plus size={14} /> 添加模型
                     </button>
                   </div>
                   <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl shadow-sm overflow-hidden text-sm">
-                    <div className="grid grid-cols-13 bg-gray-50 dark:bg-gray-800/50 px-4 py-2 border-b border-gray-200 dark:border-gray-800 text-xs font-semibold text-gray-500 uppercase">
+                    <div className="grid grid-cols-12 bg-gray-50 dark:bg-gray-800/50 px-4 py-2 border-b border-gray-200 dark:border-gray-800 text-xs font-semibold text-gray-500 uppercase">
                       <div className="col-span-1"></div>
                       <div className="col-span-4">模型 ID</div>
                       <div className="col-span-3">服务商</div>
-                      <div className="col-span-2">最大上下文</div>
-                      <div className="col-span-2">价格 (入/出)</div>
+                      <div className="col-span-3">最大上下文</div>
                       <div className="col-span-1 text-right">操作</div>
                     </div>
                     {config?.models?.map((model: any, idx: number) => (
                       <React.Fragment key={idx}>
-                        <div className="grid grid-cols-13 gap-3 px-4 py-2.5 items-center border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50/50 dark:hover:bg-gray-800/30">
+                        <div className="grid grid-cols-12 gap-3 px-4 py-2.5 items-center border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50/50 dark:hover:bg-gray-800/30">
                           <div className="col-span-1">
                             <button onClick={() => setExpandedModel(expandedModel === idx ? null : idx)} className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded transition-colors">
                               {expandedModel === idx ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -306,29 +449,64 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
                               {config.api_providers?.map((p: any) => <option key={p.name} value={p.name}>{p.name}</option>)}
                             </select>
                           </div>
-                          <div className="col-span-2">
+                          <div className="col-span-3">
                             <input type="text" value={model.max_context || ''} onChange={(e) => updateModel(idx, 'max_context', e.target.value)} className="w-full px-2 py-1 border border-transparent hover:border-gray-300 dark:hover:border-gray-700 focus:border-blue-500 rounded bg-transparent outline-none transition-colors" placeholder="如 128k" />
                           </div>
-                          <div className="col-span-2 flex gap-2">
-                            <input type="text" value={model.price_in ?? ''} onChange={(e) => updateModel(idx, 'price_in', e.target.value)} className="w-full px-2 py-1 border border-transparent hover:border-gray-300 dark:hover:border-gray-700 focus:border-blue-500 rounded bg-transparent outline-none transition-colors" placeholder="入" />
-                            <input type="text" value={model.price_out ?? ''} onChange={(e) => updateModel(idx, 'price_out', e.target.value)} className="w-full px-2 py-1 border border-transparent hover:border-gray-300 dark:hover:border-gray-700 focus:border-blue-500 rounded bg-transparent outline-none transition-colors" placeholder="出" />
-                          </div>
                           <div className="col-span-1 text-right">
-                            <button onClick={() => setConfig((prev: any) => { const newConfig = { ...prev }; newConfig.models.splice(idx, 1); return newConfig; })} className="p-1.5 text-gray-400 hover:text-red-500 rounded hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors">
+                            <button onClick={() => removeModel(idx)} className="p-1.5 text-gray-400 hover:text-red-500 rounded hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors">
                               <Trash2 size={15} />
                             </button>
                           </div>
                         </div>
                         {expandedModel === idx && (
-                          <div className="px-10 py-3 bg-gray-50/50 dark:bg-gray-800/20 border-b border-gray-100 dark:border-gray-800 grid grid-cols-2 gap-4">
-                            <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
-                              <input type="checkbox" checked={model.force_stream_mode === true} onChange={(e) => updateModel(idx, 'force_stream_mode', e.target.checked)} className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500" />
-                              强制流式模式
-                            </label>
-                            <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
-                              <input type="checkbox" checked={model.tool_call_compat === true} onChange={(e) => updateModel(idx, 'tool_call_compat', e.target.checked)} className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500" />
-                              工具调用兼容
-                            </label>
+                          <div className="px-10 py-4 bg-gray-50/50 dark:bg-gray-800/20 border-b border-gray-100 dark:border-gray-800 space-y-4">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                              <div className="space-y-1.5">
+                                <label className="text-[11px] font-semibold text-gray-500 uppercase">输入价格 ($/M Tokens)</label>
+                                <input type="text" value={model.price_in ?? ''} onChange={(e) => updateModel(idx, 'price_in', e.target.value)} className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-gray-700 rounded-md text-sm bg-white dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="0.0" />
+                              </div>
+                              <div className="space-y-1.5">
+                                <label className="text-[11px] font-semibold text-gray-500 uppercase">输出价格 ($/M Tokens)</label>
+                                <input type="text" value={model.price_out ?? ''} onChange={(e) => updateModel(idx, 'price_out', e.target.value)} className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-gray-700 rounded-md text-sm bg-white dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="0.0" />
+                              </div>
+                              <div className="space-y-1.5">
+                                <label className="text-[11px] font-semibold text-gray-500 uppercase">缓存命中输入价</label>
+                                <input type="text" value={model.cache_hit_price_in ?? ''} onChange={(e) => updateModel(idx, 'cache_hit_price_in', e.target.value)} className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-gray-700 rounded-md text-sm bg-white dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="留空则使用输入价格" />
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                              <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+                                <input type="checkbox" checked={model.force_stream_mode === true} onChange={(e) => updateModel(idx, 'force_stream_mode', e.target.checked)} className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500" />
+                                强制流式模式
+                              </label>
+                              <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+                                <input type="checkbox" checked={model.tool_call_compat === true} onChange={(e) => updateModel(idx, 'tool_call_compat', e.target.checked)} className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500" />
+                                工具调用兼容
+                              </label>
+                              <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+                                <input type="checkbox" checked={model.anti_truncation === true} onChange={(e) => updateModel(idx, 'anti_truncation', e.target.checked)} className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500" />
+                                防截断
+                              </label>
+                            </div>
+                            <div className="space-y-1.5">
+                              <label className="text-[11px] font-semibold text-gray-500 uppercase">Extra Params (JSON)</label>
+                              <textarea
+                                value={modelExtraParamsText[idx] ?? JSON.stringify(model.extra_params ?? {}, null, 2)}
+                                onChange={(e) => updateModelExtraParamsText(idx, e.target.value)}
+                                rows={4}
+                                className={`w-full px-3 py-2 border rounded-lg text-xs font-mono bg-white dark:bg-gray-950 outline-none focus:ring-1 ${
+                                  hasInvalidExtraParams(idx)
+                                    ? 'border-red-300 dark:border-red-700 focus:ring-red-500'
+                                    : 'border-gray-300 dark:border-gray-700 focus:ring-blue-500'
+                                }`}
+                                placeholder='{"reasoning_effort":"high"}'
+                              />
+                              <p className={`text-[11px] ${hasInvalidExtraParams(idx) ? 'text-red-500' : 'text-gray-500 dark:text-gray-400'}`}>
+                                {hasInvalidExtraParams(idx)
+                                  ? 'JSON 格式无效，保存前请修正。'
+                                  : '将原样写入 model.toml 的 extra_params 字段。'}
+                              </p>
+                            </div>
                           </div>
                         )}
                       </React.Fragment>

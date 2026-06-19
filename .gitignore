@@ -48,6 +48,7 @@ Thumbs.db
 # PyInstaller
 *.manifest
 *.spec
+!desktop/mofox-backend.spec
 
 # Local settings and secrets
 local_settings.py

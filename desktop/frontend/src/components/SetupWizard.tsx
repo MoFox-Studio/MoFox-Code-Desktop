@@ -40,11 +40,96 @@ interface ModelEntry {
   model_id: string;
   api_provider: string;
   max_context?: string | number;
+  price_in?: string | number;
+  price_out?: string | number;
+  cache_hit_price_in?: string | number | null;
+  force_stream_mode?: boolean;
+  tool_call_compat?: boolean;
+  anti_truncation?: boolean;
+  extra_params?: Record<string, any>;
 }
 
 const BASE_URL_DEFAULTS: Record<string, string> = {
   openai: "https://api.openai.com/v1",
   anthropic: "https://api.anthropic.com",
+};
+
+const createModelEntry = (
+  model: Partial<ModelEntry> = {},
+  defaultProvider = "",
+): ModelEntry => ({
+  model_id: model.model_id ?? "",
+  api_provider: model.api_provider ?? defaultProvider,
+  max_context: model.max_context ?? "",
+  price_in: model.price_in ?? "",
+  price_out: model.price_out ?? "",
+  cache_hit_price_in: model.cache_hit_price_in ?? "",
+  force_stream_mode: model.force_stream_mode === true,
+  tool_call_compat: model.tool_call_compat === true,
+  anti_truncation: model.anti_truncation === true,
+  extra_params: model.extra_params ?? {},
+});
+
+const buildExtraParamsTextMap = (models: ModelEntry[] = []) =>
+  Object.fromEntries(
+    models.map((model, index) => [
+      index,
+      JSON.stringify(model.extra_params ?? {}, null, 2),
+    ]),
+  );
+
+const formatMaxContextValue = (value?: string | number) => {
+  if (typeof value === "number") {
+    return value >= 1024 && value % 1024 === 0
+      ? `${value / 1024}k`
+      : value.toString();
+  }
+  return value ?? "";
+};
+
+const parseMaxContextValue = (value?: string | number) => {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  if (typeof value === "number") {
+    return value;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized.endsWith("k")) {
+    const num = parseFloat(normalized.slice(0, -1));
+    return Number.isNaN(num) ? undefined : num * 1024;
+  }
+  const num = Number.parseInt(normalized, 10);
+  return Number.isNaN(num) ? undefined : num;
+};
+
+const parseNumberValue = (value: unknown, fallback = 0) => {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : fallback;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return fallback;
+    }
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+  return fallback;
+};
+
+const parseNullableNumberValue = (value: unknown) => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === "string" && !value.trim()) {
+    return null;
+  }
+  const parsed = parseNumberValue(value, Number.NaN);
+  return Number.isNaN(parsed) ? null : parsed;
 };
 
 
@@ -79,8 +164,14 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
 
   // Step 2 — Models
   const [models, setModels] = useState<ModelEntry[]>([
-    { model_id: "gpt-4o", api_provider: "OpenAI" },
+    createModelEntry({ model_id: "gpt-4o", api_provider: "OpenAI" }),
   ]);
+  const [modelExtraParamsText, setModelExtraParamsText] = useState<Record<number, string>>(
+    () =>
+      buildExtraParamsTextMap([
+        createModelEntry({ model_id: "gpt-4o", api_provider: "OpenAI" }),
+      ]),
+  );
 
   // Step 3 — Role defaults
   const [chatModelName, setChatModelName] = useState("");
@@ -115,6 +206,11 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
 
   const effectiveChat = chatModelName || firstModelName;
 
+  const applyModels = (nextModels: ModelEntry[]) => {
+    setModels(nextModels);
+    setModelExtraParamsText(buildExtraParamsTextMap(nextModels));
+  };
+
   /* ── Provider CRUD ───────────────────────────────────── */
 
   const addProvider = () => {
@@ -127,7 +223,7 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
     const next = providers.filter((_, idx) => idx !== i);
     setProviders(next);
     setEditingProvider(Math.min(editingProvider, next.length - 1));
-    setModels((prev) => prev.filter((m) => m.api_provider !== providers[i].name));
+    applyModels(models.filter((m) => m.api_provider !== providers[i].name));
   };
 
   const updateProvider = (i: number, patch: Partial<Provider>) => {
@@ -135,7 +231,11 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
     next[i] = { ...next[i], ...patch };
     if (patch.name !== undefined) {
       const oldName = providers[i].name;
-      setModels((prev) => prev.map((m) => (m.api_provider === oldName ? { ...m, api_provider: patch.name! } : m)));
+      setModels((prev) =>
+        prev.map((m) =>
+          m.api_provider === oldName ? { ...m, api_provider: patch.name! } : m,
+        ),
+      );
     }
     setProviders(next);
   };
@@ -144,13 +244,43 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
 
   const addModel = () => {
     const defaultProv = providers[0]?.name ?? "";
-    setModels([...models, { model_id: "", api_provider: defaultProv }]);
+    applyModels([...models, createModelEntry({}, defaultProv)]);
   };
 
   const updateModel = (i: number, patch: Partial<ModelEntry>) => {
     const next = [...models];
     next[i] = { ...next[i], ...patch };
     setModels(next);
+  };
+
+  const removeModel = (index: number) => {
+    applyModels(models.filter((_, i) => i !== index));
+  };
+
+  const updateModelExtraParamsText = (index: number, value: string) => {
+    setModelExtraParamsText((prev) => ({ ...prev, [index]: value }));
+    if (!value.trim()) {
+      updateModel(index, { extra_params: {} });
+      return;
+    }
+    try {
+      updateModel(index, { extra_params: JSON.parse(value) });
+    } catch {
+      // 允许用户暂存无效 JSON，提交前再统一校验
+    }
+  };
+
+  const hasInvalidExtraParams = (index: number) => {
+    const rawValue = modelExtraParamsText[index] ?? "{}";
+    if (!rawValue.trim()) {
+      return false;
+    }
+    try {
+      JSON.parse(rawValue);
+      return false;
+    } catch {
+      return true;
+    }
   };
 
   /* ── MCP helpers ─────────────────────────────────────── */
@@ -179,6 +309,10 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
     if (step === 2) {
       if (models.length === 0) { setError("至少配置一个模型"); return; }
       if (models.some((m) => !m.model_id.trim())) { setError("请填写所有模型 ID"); return; }
+      if (models.some((_, index) => hasInvalidExtraParams(index))) {
+        setError("请修正模型 Extra Params 的 JSON 格式");
+        return;
+      }
     }
     if (step === 3) {
       if (!effectiveChat) { setError("请为对话角色选择模型"); return; }
@@ -235,27 +369,39 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
       }));
       if (impProviders.length > 0) { setProviders(impProviders); setEditingProvider(0); }
 
-      const impModels: ModelEntry[] = (d.models ?? []).map((m: any) => {
-        let mc = m.max_context;
-        if (typeof mc === 'number') {
-          mc = (mc >= 1024 && mc % 1024 === 0) ? `${mc / 1024}k` : mc.toString();
-        } else if (!mc) {
-          mc = "";
-        }
-        return {
-          model_id: m.model_id ?? "",
-          api_provider: m.api_provider ?? impProviders[0]?.name ?? "",
-          max_context: mc,
-        };
-      });
-      if (impModels.length > 0) setModels(impModels);
+      const impModels: ModelEntry[] = (d.models ?? []).map((m: any) =>
+        createModelEntry(
+          {
+            model_id: m.model_id ?? "",
+            api_provider: m.api_provider ?? impProviders[0]?.name ?? "",
+            max_context: formatMaxContextValue(m.max_context),
+            price_in: m.price_in ?? "",
+            price_out: m.price_out ?? "",
+            cache_hit_price_in: m.cache_hit_price_in ?? "",
+            force_stream_mode: m.force_stream_mode === true,
+            tool_call_compat: m.tool_call_compat === true,
+            anti_truncation: m.anti_truncation === true,
+            extra_params: m.extra_params ?? {},
+          },
+          impProviders[0]?.name ?? "",
+        ),
+      );
+      if (impModels.length > 0) applyModels(impModels);
+
+      const importedModelNames = impModels.map(modelName);
+      const defaultImportedModelName = importedModelNames[0] ?? "";
+      const pickImportedRole = (value: unknown, fallback: string) =>
+        typeof value === "string" && importedModelNames.includes(value)
+          ? value
+          : fallback;
 
       const roles = d.roles ?? {};
-      setChatModelName(roles.main ?? "");
-      setCoderModelName(roles.coder ?? "");
-      setResearcherModelName(roles.researcher ?? "");
-      setReviewerModelName(roles.reviewer ?? "");
-      setTitleModelName(roles.title ?? "");
+      const importedMain = pickImportedRole(roles.main, defaultImportedModelName);
+      setChatModelName(importedMain);
+      setCoderModelName(pickImportedRole(roles.coder, importedMain));
+      setResearcherModelName(pickImportedRole(roles.researcher, importedMain));
+      setReviewerModelName(pickImportedRole(roles.reviewer, importedMain));
+      setTitleModelName(pickImportedRole(roles.title, importedMain));
 
       const personality = d.personality ?? {};
       if (personality.nickname) setBotName(personality.nickname);
@@ -299,65 +445,79 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
     const reviewer = reviewerModelName || chat;
     const title = titleModelName || chat;
 
-    const parsedMcp = mcpServers
-      .filter((s) => s.name.trim() && s.command.trim())
-      .map((s) => ({
-        name: s.name.trim(),
-        command: s.command.trim(),
-        args: s.args.split(" ").filter((a) => a.trim()),
-        enabled: true,
-      }));
-
-    const parseMaxContext = (val?: string | number): number | undefined => {
-      if (!val) return undefined;
-      if (typeof val === 'number') return val;
-      const s = val.toString().trim().toLowerCase();
-      if (s.endsWith('k')) {
-        const num = parseFloat(s.slice(0, -1));
-        if (!isNaN(num)) return num * 1024;
-      }
-      const num = parseInt(s, 10);
-      return isNaN(num) ? undefined : num;
-    };
-
-    const configPayload = {
-      api_providers: providers.map((p) => ({
-        name: p.name.trim(),
-        client_type: p.client_type,
-        api_key: p.api_key.trim(),
-        base_url: p.base_url.trim() || (BASE_URL_DEFAULTS[p.client_type] ?? ""),
-        max_retry: p.max_retry ?? 2,
-        timeout: p.timeout ?? 30,
-        retry_interval: p.retry_interval ?? 10,
-      })),
-      models: models.map((m) => ({
-        model_id: m.model_id.trim(),
-        api_provider: m.api_provider,
-        max_context: parseMaxContext(m.max_context),
-      })),
-      roles: { main: chat, coder, researcher, reviewer, title },
-      personality: {
-        nickname: botName.trim(),
-        alias_names: aliasNames.split(',').map(s => s.trim()).filter(Boolean),
-        background_story: botBio.trim(),
-        personality_core: personalityCore.trim(),
-        personality_side: personalitySide.trim(),
-        reply_style: replyStyle.trim(),
-        identity: botIdentity.trim(),
-      },
-      model_profiles: [],
-      mcp_servers: parsedMcp,
-      coding_agent: {
-        tui_username: tuiUsername.trim() || "User",
-        preferred_terminal: preferredTerminal,
-        max_parallel_researchers: maxParallelResearchers || 6,
-        cache_ttl_hours: cacheTtlHours || 24,
-        default_timeout: 30,
-        max_output_lines: 200,
-      },
-    };
-
     try {
+      const parsedMcp = mcpServers
+        .filter((s) => s.name.trim() && s.command.trim())
+        .map((s) => ({
+          name: s.name.trim(),
+          command: s.command.trim(),
+          args: s.args.split(" ").filter((a) => a.trim()),
+          enabled: true,
+        }));
+
+      const parsedModels = models.map((m, index) => {
+        const rawExtraParams =
+          modelExtraParamsText[index] ??
+          JSON.stringify(m.extra_params ?? {}, null, 2);
+        let extraParams = {};
+
+        if (rawExtraParams.trim()) {
+          try {
+            extraParams = JSON.parse(rawExtraParams);
+          } catch {
+            throw new Error(
+              `模型 ${m.model_id || `#${index + 1}`} 的 Extra Params 不是有效 JSON`,
+            );
+          }
+        }
+
+        return {
+          model_id: m.model_id.trim(),
+          api_provider: m.api_provider,
+          max_context: parseMaxContextValue(m.max_context),
+          price_in: parseNumberValue(m.price_in, 0),
+          price_out: parseNumberValue(m.price_out, 0),
+          cache_hit_price_in: parseNullableNumberValue(m.cache_hit_price_in),
+          force_stream_mode: m.force_stream_mode === true,
+          tool_call_compat: m.tool_call_compat === true,
+          anti_truncation: m.anti_truncation === true,
+          extra_params: extraParams,
+        };
+      });
+
+      const configPayload = {
+        api_providers: providers.map((p) => ({
+          name: p.name.trim(),
+          client_type: p.client_type,
+          api_key: p.api_key.trim(),
+          base_url: p.base_url.trim() || (BASE_URL_DEFAULTS[p.client_type] ?? ""),
+          max_retry: p.max_retry ?? 2,
+          timeout: p.timeout ?? 30,
+          retry_interval: p.retry_interval ?? 10,
+        })),
+        models: parsedModels,
+        roles: { main: chat, coder, researcher, reviewer, title },
+        personality: {
+          nickname: botName.trim(),
+          alias_names: aliasNames.split(',').map(s => s.trim()).filter(Boolean),
+          background_story: botBio.trim(),
+          personality_core: personalityCore.trim(),
+          personality_side: personalitySide.trim(),
+          reply_style: replyStyle.trim(),
+          identity: botIdentity.trim(),
+        },
+        model_profiles: [],
+        mcp_servers: parsedMcp,
+        coding_agent: {
+          tui_username: tuiUsername.trim() || "User",
+          preferred_terminal: preferredTerminal,
+          max_parallel_researchers: maxParallelResearchers || 6,
+          cache_ttl_hours: cacheTtlHours || 24,
+          default_timeout: 30,
+          max_output_lines: 200,
+        },
+      };
+
       const res = await fetch(`http://127.0.0.1:${port}/api/setup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -640,24 +800,87 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
                 {step === 2 && (
                   <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-500 pb-8">
                     {models.map((m, idx) => (
-                      <div key={idx} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 shadow-sm flex flex-col sm:flex-row gap-4 relative group">
-                        <button onClick={() => setModels(prev => prev.filter((_, i) => i !== idx))} className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-red-500 rounded bg-transparent hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors">
+                      <div key={idx} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 shadow-sm relative group space-y-4">
+                        <button onClick={() => removeModel(idx)} className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-red-500 rounded bg-transparent hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors">
                           <Trash2 size={16} />
                         </button>
-                        <div className="flex-1 space-y-1.5">
-                          <label className="text-[11px] font-semibold text-gray-500 uppercase">模型 ID</label>
-                          <input type="text" value={m.model_id} onChange={(e) => updateModel(idx, { model_id: e.target.value })} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm bg-gray-50 dark:bg-gray-950 focus:ring-2 focus:ring-blue-500/50 outline-none" placeholder="例如: gpt-4o" />
+                        <div className="flex flex-col sm:flex-row gap-4">
+                          <div className="flex-1 space-y-1.5">
+                            <label className="text-[11px] font-semibold text-gray-500 uppercase">模型 ID</label>
+                            <input type="text" value={m.model_id} onChange={(e) => updateModel(idx, { model_id: e.target.value })} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm bg-gray-50 dark:bg-gray-950 focus:ring-2 focus:ring-blue-500/50 outline-none" placeholder="例如: gpt-4o" />
+                          </div>
+                          <div className="w-full sm:w-48 shrink-0 space-y-1.5">
+                            <label className="text-[11px] font-semibold text-gray-500 uppercase">所属服务商</label>
+                            <select className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm bg-gray-50 dark:bg-gray-950 focus:ring-2 focus:ring-blue-500/50 outline-none appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M5%208l5%205%205-5%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E')] bg-[length:20px] bg-[position:right_0.5rem_center] bg-no-repeat pr-8" value={m.api_provider} onChange={(e) => updateModel(idx, { api_provider: e.target.value })}>
+                              {providers.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="w-full sm:w-32 shrink-0 space-y-1.5">
+                            <label className="text-[11px] font-semibold text-gray-500 uppercase">最大上下文</label>
+                            <input className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500/50" value={m.max_context || ""} onChange={(e) => updateModel(idx, { max_context: e.target.value })} placeholder="如: 128k" />
+                          </div>
                         </div>
-                        <div className="w-full sm:w-48 shrink-0 space-y-1.5">
-                          <label className="text-[11px] font-semibold text-gray-500 uppercase">所属服务商</label>
-                          <select className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm bg-gray-50 dark:bg-gray-950 focus:ring-2 focus:ring-blue-500/50 outline-none appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M5%208l5%205%205-5%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%221.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E')] bg-[length:20px] bg-[position:right_0.5rem_center] bg-no-repeat pr-8" value={m.api_provider} onChange={(e) => updateModel(idx, { api_provider: e.target.value })}>
-                            {providers.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
-                          </select>
-                        </div>
-                        <div className="w-full sm:w-32 shrink-0 space-y-1.5">
-                          <label className="text-[11px] font-semibold text-gray-500 uppercase">最大上下文</label>
-                          <input className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500/50" value={m.max_context || ""} onChange={(e) => updateModel(idx, { max_context: e.target.value })} placeholder="如: 128k" />
-                        </div>
+
+                        <details className="group">
+                          <summary className={`text-xs font-semibold cursor-pointer transition-colors select-none ${
+                            hasInvalidExtraParams(idx)
+                              ? "text-red-500"
+                              : "text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"
+                          }`}>
+                            高级设置
+                          </summary>
+                          <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-800/60 space-y-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                              <div className="space-y-1.5">
+                                <label className="text-[11px] font-semibold text-gray-500 uppercase">输入价格 ($/M Tokens)</label>
+                                <input type="text" value={m.price_in ?? ""} onChange={(e) => updateModel(idx, { price_in: e.target.value })} className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-gray-700 rounded-md text-sm bg-white dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="0.0" />
+                              </div>
+                              <div className="space-y-1.5">
+                                <label className="text-[11px] font-semibold text-gray-500 uppercase">输出价格 ($/M Tokens)</label>
+                                <input type="text" value={m.price_out ?? ""} onChange={(e) => updateModel(idx, { price_out: e.target.value })} className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-gray-700 rounded-md text-sm bg-white dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="0.0" />
+                              </div>
+                              <div className="space-y-1.5">
+                                <label className="text-[11px] font-semibold text-gray-500 uppercase">缓存命中输入价</label>
+                                <input type="text" value={m.cache_hit_price_in ?? ""} onChange={(e) => updateModel(idx, { cache_hit_price_in: e.target.value })} className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-gray-700 rounded-md text-sm bg-white dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="留空则跟随输入价格" />
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                              <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+                                <input type="checkbox" checked={m.force_stream_mode === true} onChange={(e) => updateModel(idx, { force_stream_mode: e.target.checked })} className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500" />
+                                强制流式模式
+                              </label>
+                              <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+                                <input type="checkbox" checked={m.tool_call_compat === true} onChange={(e) => updateModel(idx, { tool_call_compat: e.target.checked })} className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500" />
+                                工具调用兼容
+                              </label>
+                              <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+                                <input type="checkbox" checked={m.anti_truncation === true} onChange={(e) => updateModel(idx, { anti_truncation: e.target.checked })} className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500" />
+                                防截断
+                              </label>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <label className="text-[11px] font-semibold text-gray-500 uppercase">Extra Params (JSON)</label>
+                              <textarea
+                                value={modelExtraParamsText[idx] ?? JSON.stringify(m.extra_params ?? {}, null, 2)}
+                                onChange={(e) => updateModelExtraParamsText(idx, e.target.value)}
+                                rows={4}
+                                className={`w-full px-3 py-2 border rounded-lg text-xs font-mono bg-white dark:bg-gray-950 outline-none focus:ring-1 ${
+                                  hasInvalidExtraParams(idx)
+                                    ? "border-red-300 dark:border-red-700 focus:ring-red-500"
+                                    : "border-gray-300 dark:border-gray-700 focus:ring-blue-500"
+                                }`}
+                                placeholder='{"reasoning_effort":"high"}'
+                              />
+                              <p className={`text-[11px] ${hasInvalidExtraParams(idx) ? "text-red-500" : "text-gray-500 dark:text-gray-400"}`}>
+                                {hasInvalidExtraParams(idx)
+                                  ? "JSON 格式无效，提交前请修正。"
+                                  : "将原样写入 model.toml 的 extra_params 字段。"}
+                              </p>
+                            </div>
+                          </div>
+                        </details>
                       </div>
                     ))}
                     <button type="button" onClick={addModel} className="w-full py-4 border-2 border-dashed border-gray-300 dark:border-gray-700 rounded-xl text-sm font-medium text-gray-600 dark:text-gray-400 hover:border-blue-500 hover:text-blue-600 dark:hover:border-blue-500 dark:hover:text-blue-400 transition-colors flex items-center justify-center gap-2">

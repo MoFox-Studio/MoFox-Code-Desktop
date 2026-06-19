@@ -49,12 +49,33 @@ def parse_configs(config_dir: str = "config") -> dict[str, Any]:
     if isinstance(raw_models, dict):
         raw_models = [raw_models]
     models_out = []
+    available_model_names: list[str] = []
+    model_name_aliases: dict[str, list[str]] = {}
+
+    def _register_model_alias(alias: Any, canonical_name: str) -> None:
+        if not isinstance(alias, str):
+            return
+        normalized = alias.strip()
+        if not normalized:
+            return
+        existing = model_name_aliases.setdefault(normalized, [])
+        if canonical_name not in existing:
+            existing.append(canonical_name)
+
     for m in raw_models:
         if not isinstance(m, dict):
             continue
+        model_id = m.get("model_identifier", "")
+        provider_name = m.get("api_provider", api_providers[0]["name"] if api_providers else "")
+        canonical_name = f"{provider_name}/{model_id}" if provider_name and model_id else ""
+        if canonical_name:
+            available_model_names.append(canonical_name)
+        _register_model_alias(m.get("name", ""), canonical_name)
+        _register_model_alias(model_id, canonical_name)
+        _register_model_alias(canonical_name, canonical_name)
         models_out.append({
-            "model_id": m.get("model_identifier", ""),
-            "api_provider": m.get("api_provider", api_providers[0]["name"] if api_providers else ""),
+            "model_id": model_id,
+            "api_provider": provider_name,
             "max_context": m.get("max_context", ""),
             "price_in": m.get("price_in", 0.0),
             "price_out": m.get("price_out", 0.0),
@@ -67,12 +88,27 @@ def parse_configs(config_dir: str = "config") -> dict[str, Any]:
 
     # ── Roles ──────────────────────────────────
     tasks = model_data.get("model_tasks", {})
+
+    def _canonicalize_task_model_name(raw_name: Any) -> str:
+        if not isinstance(raw_name, str):
+            return ""
+        normalized = raw_name.strip()
+        if not normalized:
+            return ""
+        matched = model_name_aliases.get(normalized, [])
+        if len(matched) == 1:
+            return matched[0]
+        if normalized in available_model_names:
+            return normalized
+        return ""
+
     def _task_name(task_name: str) -> str:
         t = tasks.get(task_name, {})
         ml = t.get("model_list", [])
-        return ml[0] if ml else ""
+        return _canonicalize_task_model_name(ml[0]) if ml else ""
 
-    main_name = _task_name("coding_main") or _task_name("utils")
+    default_model_name = available_model_names[0] if available_model_names else ""
+    main_name = _task_name("coding_main") or _task_name("utils") or default_model_name
     coder_name = _task_name("coding_coder") or main_name
     researcher_name = _task_name("coding_researcher") or main_name
     reviewer_name = _task_name("coding_reviewer") or main_name
