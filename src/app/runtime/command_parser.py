@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import queue
+import sys
 import threading
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -53,7 +54,7 @@ class CommandParser:
         self._input_thread = threading.Thread(
             target=self._input_worker,
             name="command_input_reader",
-            daemon=True,
+            daemon=False,
         )
         self._input_thread.start()
 
@@ -79,6 +80,13 @@ class CommandParser:
     def close(self) -> None:
         """关闭命令解析器资源。"""
         self._input_stop_event.set()
+        # 关闭 stdin 强制中断 input() 的阻塞，使 _input_worker 退出
+        try:
+            sys.stdin.close()
+        except Exception:
+            pass
+        # 等待后台线程干净退出
+        self._input_thread.join(timeout=2.0)
 
     async def _get_next_input(
         self, timeout: float = 0.2

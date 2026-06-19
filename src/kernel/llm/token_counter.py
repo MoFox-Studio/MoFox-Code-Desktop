@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 
 from .payload import LLMPayload, Text, ToolCall, ToolResult
+from .payload.content import File
 
 
 def _get_tiktoken_encoding(model_identifier: str):
@@ -62,14 +63,15 @@ def _serialize_payload(payload: LLMPayload) -> str:
                 chunks.append(str(part))
                 continue
 
+        # File 类型（Image / Audio / Video）：base64 数据不参与 token 计数，
+        # 使用固定估算值。实际 API 按多模态定价，与文本 token 独立计算。
+        if isinstance(part, File):
+            chunks.append("[multimodal_file:~500tokens]")
+            continue
+
         text = getattr(part, "text", None)
         if isinstance(text, str):
             chunks.append(text)
-            continue
-
-        value = getattr(part, "value", None)
-        if isinstance(value, str):
-            chunks.append(value)
             continue
 
         chunks.append(str(part))

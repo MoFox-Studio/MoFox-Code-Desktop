@@ -6,7 +6,9 @@ Neo-MoFox 框架的核心协调器，负责系统初始化、插件加载和生�
 from __future__ import annotations
 
 import asyncio
+import os
 import socket
+import sys
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -102,6 +104,11 @@ class Bot:
         self.load_results: dict[str, bool] = {}
         self._telemetry_log_unsubscribe: Any | None = None
 
+        # DNS 专用线程池与原始 loop 方法（用于关闭时恢复）
+        self._dns_executor: ThreadPoolExecutor | None = None
+        self._original_getaddrinfo: Any | None = None
+        self._original_getnameinfo: Any | None = None
+
         # 统计数据
         self._stats: dict[str, int | bool | dict] = {
             "plugins_loaded": 0,
@@ -196,19 +203,23 @@ class Bot:
         """优化异步网络运行时：线程池与 DNS 预解析。"""
         loop = asyncio.get_running_loop()
 
+        # 保存原始方法，供 shutdown 时恢复
+        self._original_getaddrinfo = loop.getaddrinfo
+        self._original_getnameinfo = loop.getnameinfo
+
         # 默认线程池：承载 to_thread / run_in_executor(None, ...)
         loop.set_default_executor(ThreadPoolExecutor(max_workers=192))
 
         # DNS 专用线程池：避免 getaddrinfo 被通用任务挤占
-        dns_executor = ThreadPoolExecutor(max_workers=16)
+        self._dns_executor = ThreadPoolExecutor(max_workers=16)
 
         async def _patched_getaddrinfo(host, port, *args, **kwargs):
             func = partial(socket.getaddrinfo, host, port, *args, **kwargs)
-            return await loop.run_in_executor(dns_executor, func)
+            return await loop.run_in_executor(self._dns_executor, func)
 
         async def _patched_getnameinfo(sockaddr, flags=0):
             func = partial(socket.getnameinfo, sockaddr, flags)
-            return await loop.run_in_executor(dns_executor, func)
+            return await loop.run_in_executor(self._dns_executor, func)
 
         loop.getaddrinfo = _patched_getaddrinfo  # type: ignore[method-assign]
         loop.getnameinfo = _patched_getnameinfo  # type: ignore[method-assign]
@@ -816,13 +827,18 @@ class Bot:
         signal_handler = SignalHandler(self)
         signal_handler.register_signals()
 
-        # 创建交互式命令解析器
-        from .command_parser import CommandParser
+        command_parser = None
+        interactive_commands_enabled = self._should_enable_command_parser()
+        if interactive_commands_enabled:
+            from .command_parser import CommandParser
 
-        command_parser = CommandParser(self)
+            command_parser = CommandParser(self)
 
         self.logger.info("Neo-MoFox Bot 启动成功")
-        self.logger.info("输入 /help 查看可用命令")
+        if interactive_commands_enabled:
+            self.logger.info("输入 /help 查看可用命令")
+        else:
+            self.logger.info("当前运行环境不提供交互式 stdin，已跳过命令输入循环")
 
         # 主循环
         try:
@@ -833,11 +849,13 @@ class Bot:
             )
             while self._running:
                 try:
-                    # 读取并执行命令（内部使用短超时轮询）
-                    should_continue = await command_parser.read_and_execute()
-
-                    if not should_continue:
-                        break
+                    if command_parser is not None:
+                        # 读取并执行命令（内部使用短超时轮询）
+                        should_continue = await command_parser.read_and_execute()
+                        if not should_continue:
+                            break
+                    else:
+                        await asyncio.sleep(0.2)
 
                     # 更新仪表盘统计
                     if self.ui.level == UILevel.VERBOSE:
@@ -857,7 +875,8 @@ class Bot:
 
         finally:
             await self._record_runtime_snapshot(event_name="run_stopped")
-            command_parser.close()
+            if command_parser is not None:
+                command_parser.close()
 
             # 停止实时仪表盘
             if self.ui.level == UILevel.VERBOSE:
@@ -880,6 +899,20 @@ class Bot:
         }
 
         self.ui.update_dashboard_stats(stats)
+
+    def _should_enable_command_parser(self) -> bool:
+        """判断当前运行环境是否支持交互式命令输入。"""
+        if os.environ.get("MOFOX_CODE_DESKTOP") == "1":
+            return False
+
+        stdin = sys.stdin
+        if stdin is None:
+            return False
+
+        try:
+            return not stdin.closed and stdin.isatty()
+        except Exception:
+            return False
 
     def _install_telemetry_hooks(self) -> None:
         """安装遥测日志订阅。"""
@@ -1164,6 +1197,33 @@ class Bot:
             from src.kernel.llm.stats import close_llm_stats_db
             await close_llm_stats_db()
 
+            # 10.6.1 停止 StreamLoopManager
+            from src.core.transport.distribution.stream_loop_manager import (
+                get_stream_loop_manager,
+            )
+            stream_loop_manager = get_stream_loop_manager()
+            if stream_loop_manager.is_running:
+                await stream_loop_manager.stop()
+
+            # 10.6.2 恢复 DNS patch 并关闭 DNS 线程池
+            loop = asyncio.get_running_loop()
+            if self._original_getaddrinfo is not None:
+                loop.getaddrinfo = self._original_getaddrinfo  # type: ignore[method-assign]
+                self._original_getaddrinfo = None
+            if self._original_getnameinfo is not None:
+                loop.getnameinfo = self._original_getnameinfo  # type: ignore[method-assign]
+                self._original_getnameinfo = None
+
+            if self._dns_executor is not None:
+                self._dns_executor.shutdown(wait=False, cancel_futures=True)
+                self._dns_executor = None
+
+            # 10.6.3 显式关闭默认线程池
+            default_executor = loop._default_executor  # type: ignore[attr-defined]
+            if default_executor is not None:
+                default_executor.shutdown(wait=False, cancel_futures=True)
+                loop._default_executor = None  # type: ignore[attr-defined]
+
             await self._record_runtime_snapshot(event_name="shutdown_complete")
 
             if callable(self._telemetry_log_unsubscribe):
@@ -1178,6 +1238,13 @@ class Bot:
             from src.kernel.logger import shutdown_logger_system
 
             shutdown_logger_system()
+
+            # 12. 取消并等待所有剩余 asyncio 任务
+            remaining = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+            if remaining:
+                for t in remaining:
+                    t.cancel()
+                await asyncio.wait(remaining, timeout=5.0)
 
             self.ui.display_success("关闭完成")
 

@@ -48,6 +48,7 @@ Thumbs.db
 # PyInstaller
 *.manifest
 *.spec
+!desktop/mofox-backend.spec
 
 # Local settings and secrets
 local_settings.py
@@ -72,14 +73,12 @@ reports/
 # Ignore compiled binaries
 *.exe
 *.dll
-*.so
 
 # Ignore temporary files
 *.tmp
 ~*
 
 # Ignore build artifacts from poetry/uv if any
-.venv/
 poetry.lock
 
 # Project-specific
@@ -88,7 +87,6 @@ poetry.lock
 opencode.json
 
 logs/*
-htmlcov/
 .ruff_cache/
 old/
 data/*
@@ -98,13 +96,68 @@ plugins/*
 skill/*
 typings/
 
+debug/
+
+# ---------:contentReference[oaicite:0]{index=0}/
+
+# pnpm / yarn / npm / bun
+.pnpm-store/
+.npm/
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+
+# ---------- Frontend build output ----------
+.output/
+.next/
+.nuxt/
+.svelte-kit/
+.vite/
+.angular/
+
+# ---------- Tauri / Rust build output ----------
+target/
+src-tauri/target/
+.tauri/
+src-tauri/.tauri/
+
+# Tauri mobile generated/build files
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/build/
+src-tauri/gen/android/app/build/
+src-tauri/gen/android/local.properties
+src-tauri/gen/apple/Pods/
+src-tauri/gen/apple/build/
+src-tauri/gen/apple/DerivedData/
+
+# ---------- Logs ----------
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+bun-debug.log*
+
+# ---------- Env / Secrets ----------
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# ---------- IDE / OS ----------
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+
+*.iml
+
+# ---------- Test / temp ----------
+tmp/
+temp/
+.cache/
+*.bak
+
 .agents/
 skills-lock.json
-
-!plugins/default_chatter/
-!plugins/onebot_adapter/
-!plugins/booku_memory/
-!plugins/emoji_sender/
-!plugins/perm_plugin/
-!plugins/utility_commands/
-!plugins/skill_manager/
