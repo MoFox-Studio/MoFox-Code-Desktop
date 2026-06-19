@@ -1,0 +1,6 @@
+[submodule "plugins/coding_agent"]
+	path = plugins/coding_agent
+	url = https://github.com/Windpicker-owo/coding_agent.git
+[submodule "plugins/coding_agent_webui"]
+	path = plugins/coding_agent_webui
+	url = https://github.com/Windpicker-owo/coding_agent_webui.git
