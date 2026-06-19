@@ -21,9 +21,18 @@ fn project_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// 查找后端可执行文件（PyInstaller 打包 > dev Python 回退）
+/// 查找后端可执行文件
+///
+/// - **debug 构建**：始终使用 `.venv` Python 源码路径，忽略任何打包残留
+/// - **release 构建**：优先使用 PyInstaller 打包的 `mofox-backend.exe`，回退 `.venv` Python
 fn find_backend_exe() -> (PathBuf, PathBuf) {
-    // 生产模式：查找与 Tauri exe 同目录的 mofox-backend.exe
+    // debug 构建：跳过打包 exe 查找，直接走 Python 源码路径
+    if cfg!(debug_assertions) {
+        let project = project_root();
+        return (project.join(".venv").join("Scripts").join("python.exe"), project);
+    }
+
+    // release 构建：查找与 Tauri exe 同目录的 mofox-backend.exe
     if let Ok(exe_path) = std::env::current_exe() {
         let exe_dir = exe_path.parent().unwrap_or_else(|| Path::new("."));
         let bundled_dir = exe_dir.join("mofox-backend");
@@ -32,7 +41,7 @@ fn find_backend_exe() -> (PathBuf, PathBuf) {
             return (bundled, bundled_dir);
         }
     }
-    // 开发模式：使用 .venv python + 项目根目录
+    // 回退：使用 .venv python + 项目根目录
     let project = project_root();
     (project.join(".venv").join("Scripts").join("python.exe"), project)
 }

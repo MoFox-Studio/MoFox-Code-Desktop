@@ -136,18 +136,6 @@ function App() {
       {appState === 'main' && (
         <>
           <WindowControls />
-          <div 
-            data-tauri-drag-region 
-            className="shell-drag-region"
-            style={{ 
-              position: 'absolute', 
-              top: 0, 
-              left: '260px', 
-              right: '320px', 
-              height: '48px', 
-              zIndex: 9998 
-            }} 
-          />
           <div className="shell-main-content" style={{ height: '100vh', width: '100vw' }}>
             <iframe 
               id="plugin-iframe"

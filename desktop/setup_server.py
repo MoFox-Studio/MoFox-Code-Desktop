@@ -59,7 +59,7 @@ def _create_setup_app(config_dir: str, server_ref: list | None = None):
         return {
             "title": "MoFox Code",
             "default_theme": "light",
-            "avatar_url": "/logo.png",
+            "avatar_url": "/bot-avatar.png",
             "desktop_mode": os.environ.get("MOFOX_CODE_DESKTOP") == "1",
         }
 

@@ -173,14 +173,26 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
       if (!effectiveChat) { setError("请为对话角色选择模型"); return; }
     }
     if (typeof step === 'number') {
-      setStep(step + 1);
+      if (document.startViewTransition) {
+        document.startViewTransition(() => {
+          setStep(step + 1);
+        });
+      } else {
+        setStep(step + 1);
+      }
     }
   };
 
   const prevStep = () => {
     setError("");
     if (typeof step === 'number') {
-      setStep(step - 1);
+      if (document.startViewTransition) {
+        document.startViewTransition(() => {
+          setStep(step - 1);
+        });
+      } else {
+        setStep(step - 1);
+      }
     }
   };
 
@@ -325,7 +337,13 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
         throw new Error(errData.message || "提交配置失败");
       }
       // 触发成功演出 (Celebration)
-      setStep('completed');
+      if (document.startViewTransition) {
+        document.startViewTransition(() => {
+          setStep('completed');
+        });
+      } else {
+        setStep('completed');
+      }
       setTimeout(() => {
         onComplete();
       }, 2500); // 展示2.5秒
