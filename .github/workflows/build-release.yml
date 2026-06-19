@@ -66,11 +66,13 @@ jobs:
 
       # ── Frontend builds ─────────────────────────────
 
+      - name: Install WebUI frontend deps
+        working-directory: plugins/coding_agent_webui/frontend
+        run: npm ci
+
       - name: Build WebUI frontend
-        run: |
-          cd plugins/coding_agent_webui/frontend
-          npm ci
-          npm run build
+        working-directory: plugins/coding_agent_webui/frontend
+        run: npm run build
 
       - name: Install Tauri shell frontend deps
         run: |
