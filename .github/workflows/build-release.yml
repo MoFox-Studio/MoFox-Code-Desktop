@@ -90,8 +90,11 @@ jobs:
 
       - name: Copy plugins to output root
         run: |
+          $robocopyCode = 0
           robocopy desktop/dist/mofox-backend/_internal/plugins desktop/dist/mofox-backend/plugins /E /NFL /NDL /NJH /NJS
-          if ($LASTEXITCODE -ge 8) { exit $LASTEXITCODE }
+          $robocopyCode = $LASTEXITCODE
+          if ($robocopyCode -ge 8) { exit $robocopyCode }
+          $global:LASTEXITCODE = 0
 
       # ── Tauri build ─────────────────────────────────
       # beforeBuildCommand (cd ../frontend && npm run build) runs automatically
@@ -113,7 +116,11 @@ jobs:
           if (Test-Path $portableDir) { Remove-Item -Recurse -Force $portableDir }
           New-Item -ItemType Directory -Force -Path $portableDir
           Copy-Item "desktop/tauri/target/release/mofox-code-desktop.exe" "$portableDir/"
+          $robocopyCode = 0
           robocopy desktop/dist/mofox-backend "$portableDir/mofox-backend" /E /NFL /NDL /NJH /NJS
+          $robocopyCode = $LASTEXITCODE
+          if ($robocopyCode -ge 8) { exit $robocopyCode }
+          $global:LASTEXITCODE = 0
           Compress-Archive -Path "$portableDir" -DestinationPath "desktop/dist/MoFox-Code-portable.zip" -Force
           echo "Portable package created: desktop/dist/MoFox-Code-portable.zip"
 
