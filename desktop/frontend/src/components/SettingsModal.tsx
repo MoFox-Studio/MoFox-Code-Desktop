@@ -282,7 +282,41 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose, onRestart 
   const updateProvider = (index: number, field: string, value: string) => {
     setConfig((prev: any) => {
       const newConfig = { ...prev };
+      const oldName = newConfig.api_providers[index][field];
       newConfig.api_providers[index][field] = value;
+
+      // 当供应商名称变更时，同步更新 models.api_provider、roles 和 model_profiles 中的引用
+      if (field === 'name' && oldName !== value) {
+        // 更新 models 中的 api_provider 引用
+        if (newConfig.models) {
+          newConfig.models = newConfig.models.map((m: any) =>
+            m.api_provider === oldName ? { ...m, api_provider: value } : m
+          );
+        }
+        // 更新 roles 中的 "OldName/modelId" → "NewName/modelId"
+        if (newConfig.roles) {
+          const prefix = `${oldName}/`;
+          const newRoles: Record<string, string> = {};
+          for (const [role, modelName] of Object.entries(newConfig.roles)) {
+            if (typeof modelName === 'string' && modelName.startsWith(prefix)) {
+              newRoles[role] = `${value}/${modelName.slice(prefix.length)}`;
+            } else {
+              newRoles[role] = modelName;
+            }
+          }
+          newConfig.roles = newRoles;
+        }
+        // 更新 model_profiles 中的 model_name
+        if (newConfig.model_profiles) {
+          newConfig.model_profiles = newConfig.model_profiles.map((mp: any) => {
+            if (typeof mp.model_name === 'string' && mp.model_name.startsWith(prefix)) {
+              return { ...mp, model_name: `${value}/${mp.model_name.slice(prefix.length)}` };
+            }
+            return mp;
+          });
+        }
+      }
+
       return newConfig;
     });
   };
@@ -290,7 +324,31 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose, onRestart 
   const updateModel = (index: number, field: string, value: any) => {
     setConfig((prev: any) => {
       const newConfig = { ...prev };
-      newConfig.models[index][field] = value;
+      const oldModel = { ...newConfig.models[index] };
+      newConfig.models[index] = { ...oldModel, [field]: value };
+
+      // 当 model_id 或 api_provider 变更时，同步更新 roles 和 model_profiles 中的引用
+      if (field === 'model_id' || field === 'api_provider') {
+        const oldName = `${oldModel.api_provider}/${oldModel.model_id}`;
+        const newName = `${newConfig.models[index].api_provider}/${newConfig.models[index].model_id}`;
+        if (oldName !== newName && oldModel.model_id && oldModel.api_provider) {
+          // 更新 roles
+          if (newConfig.roles) {
+            const newRoles: Record<string, string> = {};
+            for (const [role, modelName] of Object.entries(newConfig.roles)) {
+              newRoles[role] = modelName === oldName ? newName : modelName;
+            }
+            newConfig.roles = newRoles;
+          }
+          // 更新 model_profiles
+          if (newConfig.model_profiles) {
+            newConfig.model_profiles = newConfig.model_profiles.map((mp: any) =>
+              mp.model_name === oldName ? { ...mp, model_name: newName } : mp
+            );
+          }
+        }
+      }
+
       return newConfig;
     });
   };
