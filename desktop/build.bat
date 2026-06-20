@@ -20,6 +20,10 @@ cd /d "%ROOT_DIR%\plugins\coding_agent_webui\frontend"
 call npm run build
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
+echo === Step 1.5: Copy tauri.conf.json for version detection ===
+copy /Y "%ROOT_DIR%\desktop\tauri\tauri.conf.json" "%ROOT_DIR%\plugins\coding_agent_webui\tauri.conf.json"
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
 echo === Step 2: PyInstaller build backend ===
 cd /d "%ROOT_DIR%"
 .venv\Scripts\python.exe -m PyInstaller desktop\mofox-backend.spec --distpath desktop\dist --workpath desktop\build --clean

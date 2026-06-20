@@ -95,6 +95,7 @@ config/*
 plugins/*
 !plugins/coding_agent
 !plugins/coding_agent_webui
+plugins/coding_agent_webui/tauri.conf.json
 skill/*
 typings/
 
