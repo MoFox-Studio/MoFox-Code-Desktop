@@ -57,7 +57,10 @@ const SettingSelect = ({ value, onChange, children, className = "" }: any) => {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const options = React.Children.toArray(children).filter(child => React.isValidElement(child) && (child as React.ReactElement).type === 'option') as React.ReactElement[];
+  const options = React.Children.toArray(children).filter(
+    (child): child is React.ReactElement<React.OptionHTMLAttributes<HTMLOptionElement>, 'option'> =>
+      React.isValidElement<React.OptionHTMLAttributes<HTMLOptionElement>>(child) && child.type === 'option',
+  );
   const selectedOption = options.find(opt => opt.props.value === value) || options[0];
 
   return (

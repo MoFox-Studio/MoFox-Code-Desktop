@@ -4,7 +4,6 @@ import { listen } from '@tauri-apps/api/event';
 import SplashScreen from './components/SplashScreen';
 import SetupWizard from './components/SetupWizard';
 import SettingsModal from './components/SettingsModal';
-import { X } from 'lucide-react';
 import './index.css';
 
 type AppState = 'booting' | 'setup' | 'main';
