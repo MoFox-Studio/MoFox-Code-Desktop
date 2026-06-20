@@ -403,11 +403,11 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
       const res = await fetch(`http://127.0.0.1:${port}/api/setup/import`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config_dir: importPath.trim() }),
+        body: JSON.stringify({ path: importPath.trim() }),
       });
       const json = await res.json();
       if (json.status !== "ok") throw new Error(json.message || "导入失败");
-      const d = json.data;
+      const d = json;
 
       const impProviders: Provider[] = (d.api_providers ?? []).map((p: any) => ({
         name: p.name ?? "",

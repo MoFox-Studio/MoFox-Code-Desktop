@@ -67,7 +67,7 @@ function App() {
       try {
         const status = await invoke<string>('get_backend_status');
         
-        if (status === 'running' || status === 'exited:0') {
+        if (status === 'running') {
           try {
             // Fallback 端口列表：实际端口由 config/webui 决定（默认 8681），
             // 此处扫描仅用于多实例或端口被占用时的兜底发现。

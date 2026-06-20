@@ -237,7 +237,7 @@ pub fn run() {
 
                                 // 通知前端显示"正在关闭"提示
                                 let _ = window.emit("closing-backend", ());
-                                eprintln!("[Tauri] Closing window — waiting up to 3s for backend to exit gracefully");
+                                eprintln!("[Tauri] Closing window — waiting up to 2s for backend to exit gracefully");
 
                                 let mut backend = proc.take().unwrap();
                                 drop(proc);

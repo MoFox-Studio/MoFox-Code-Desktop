@@ -112,17 +112,17 @@ def _create_setup_app(config_dir: str, server_ref: list | None = None):
         返回与向导前端相同格式的配置字典，供前端回填表单。
 
         Args:
-            request: 包含 config_dir（配置文件目录路径）的请求体。
+            request: 包含 path 或 config_dir（配置文件目录路径）的请求体。
 
         Returns:
             JSONResponse: 包含 wizard 格式配置的响应。
         """
         from desktop.config_parser import parse_configs
 
-        cfg_dir = request.get("config_dir", "")
+        cfg_dir = request.get("path") or request.get("config_dir", "")
         if not cfg_dir:
             return JSONResponse(
-                content={"status": "error", "message": "未提供 config_dir"},
+                content={"status": "error", "message": "未提供 path 或 config_dir"},
                 status_code=400,
             )
 
@@ -140,10 +140,8 @@ def _create_setup_app(config_dir: str, server_ref: list | None = None):
                     content={"status": "error", "message": "目录中未找到有效配置文件"},
                     status_code=400,
                 )
-            # parse_configs 返回 {status: "ok", ...data}，前端期望 data 字段
-            return JSONResponse(
-                content={"status": "ok", "data": result}, status_code=200,
-            )
+            # 返回平铺格式，与 router.py 一致
+            return JSONResponse(content=result, status_code=200)
 
         except Exception as e:
             import traceback
