@@ -189,7 +189,7 @@ function App() {
                   <div className="flex-1"></div>
                 </div>
                 <div className="flex-1 overflow-hidden">
-                  <SettingsModal port={activePort} onClose={() => setShowSettings(false)} />
+                  <SettingsModal port={activePort} onClose={() => setShowSettings(false)} onRestart={handleSetupComplete} />
                 </div>
               </div>
             )}

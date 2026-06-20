@@ -152,6 +152,91 @@ def _create_setup_app(config_dir: str, server_ref: list | None = None):
                 status_code=500,
             )
 
+    # ── 模型获取工具函数 ──────────────────────────
+
+    async def _fetch_models_from_provider(client_type: str, api_key: str, base_url: str) -> list[str]:
+        """从指定提供商获取模型列表。
+
+        Args:
+            client_type: 客户端类型 (openai / anthropic)。
+            api_key: API 密钥。
+            base_url: 自定义 Base URL。
+
+        Returns:
+            list[str]: 模型 ID 列表。
+        """
+        if client_type == "anthropic":
+            from anthropic import AsyncAnthropic
+
+            client = AsyncAnthropic(api_key=api_key, base_url=base_url or None)
+        else:  # openai-compatible (含 google 等兼容平台)
+            from openai import AsyncOpenAI
+
+            client = AsyncOpenAI(api_key=api_key, base_url=base_url or None)
+        response = await client.models.list()
+        return [m.id for m in response.data]
+
+    @app.post("/api/test-provider")
+    async def test_provider(body: dict):
+        """测试 API 提供商连接可用性。
+
+        接收 JSON body: {client_type, api_key, base_url}，
+        尝试调用 models.list() 验证凭证有效性。
+        """
+        client_type = body.get("client_type", "openai")
+        api_key = body.get("api_key", "")
+        base_url = body.get("base_url", "")
+
+        if not api_key.strip():
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "API Key 不能为空"},
+            )
+
+        try:
+            await _fetch_models_from_provider(client_type, api_key, base_url)
+            return JSONResponse(
+                content={"status": "ok", "message": "连接成功"},
+                status_code=200,
+            )
+        except Exception as e:
+            return JSONResponse(
+                content={"status": "error", "message": str(e)},
+                status_code=200,
+            )
+
+    @app.post("/api/fetch-models")
+    async def fetch_models(body: dict):
+        """从 API 提供商获取可用模型列表。
+
+        接收 JSON body: {client_type, api_key, base_url}，
+        调用 models.list() 返回模型 ID 列表。
+        """
+        client_type = body.get("client_type", "openai")
+        api_key = body.get("api_key", "")
+        base_url = body.get("base_url", "")
+
+        if not api_key.strip():
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "API Key 不能为空"},
+            )
+
+        try:
+            models = await _fetch_models_from_provider(client_type, api_key, base_url)
+            return JSONResponse(
+                content={
+                    "status": "ok",
+                    "models": [{"id": mid} for mid in models],
+                },
+                status_code=200,
+            )
+        except Exception as e:
+            return JSONResponse(
+                content={"status": "error", "message": str(e)},
+                status_code=200,
+            )
+
     # 静态文件：如果前端 SPA 构建产物存在，直接挂载 StaticFiles
     frontend_dist = Path("plugins/coding_agent_webui/dist")
     if frontend_dist.exists():

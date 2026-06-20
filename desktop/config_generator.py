@@ -278,31 +278,16 @@ def _generate_model_toml(wizard_config: dict[str, Any], path: Path) -> None:
 
 
 def _generate_mcp_toml(wizard_config: dict[str, Any], path: Path) -> None:
-    """生成 mcp.toml — 预置 fetch 和 bing-search，并合并用户在向导中配置的 MCP 服务器。"""
+    """生成 mcp.toml — 仅包含用户在向导中配置的 MCP 服务器。"""
     from src.core.config.mcp_config import MCPConfig
     from src.kernel.config.core import _render_toml_with_signature
 
     data = MCPConfig.default()
 
-    # 预置 fetch 服务器
-    data["mcp"]["stdio_servers"] = {
-        "fetch": {
-            "command": "uvx",
-            "args": ["mcp-server-fetch"],
-            "env": {},
-            "instructions": "Fetch URLs and extract their contents as markdown. Use for reading web pages, documentation, and API responses.",
-            "defer_loading": False,
-        },
-        "bing-search": {
-            "command": "uvx",
-            "args": ["mcp-server-bing-search"],
-            "env": {},
-            "instructions": "Search the web using Bing. Use for finding up-to-date information, documentation, and references.",
-            "defer_loading": False,
-        },
-    }
+    # 不预置任何 MCP 服务器，仅写入用户配置的
+    data["mcp"]["stdio_servers"] = {}
 
-    # 合并用户在向导中配置的 MCP 服务器（覆盖同名预设）
+    # 合并用户在向导中配置的 MCP 服务器
     user_mcp_servers = wizard_config.get("mcp_servers", [])
     for server in user_mcp_servers:
         if not server.get("name") or not server.get("command"):
@@ -323,8 +308,8 @@ def _generate_mcp_toml(wizard_config: dict[str, Any], path: Path) -> None:
 
 
 def _get_all_mcp_server_names(wizard_config: dict[str, Any]) -> list[str]:
-    """汇总所有 MCP 服务器名称（预设 + 用户配置），用于 coding_agent 的 MCP 引用。"""
-    server_names = {"fetch", "bing-search"}  # 预设服务器
+    """汇总所有 MCP 服务器名称（仅用户配置），用于 coding_agent 的 MCP 引用。"""
+    server_names: set[str] = set()
     for server in wizard_config.get("mcp_servers", []):
         name = server.get("name", "").strip()
         if name and server.get("enabled", True):

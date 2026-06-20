@@ -102,6 +102,7 @@ const SettingSelect = ({ value, onChange, children, className = "" }: any) => {
 interface SettingsModalProps {
   port: number;
   onClose: () => void;
+  onRestart?: () => void;
 }
 
 const buildExtraParamsTextMap = (models: any[] = []) =>
@@ -164,7 +165,7 @@ const parseNullableNumberValue = (value: unknown) => {
   return Number.isNaN(parsed) ? null : parsed;
 };
 
-const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
+const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose, onRestart }) => {
   const [activeTab, setActiveTab] = useState('general');
   const [config, setConfig] = useState<any>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -251,7 +252,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
       } else {
         setSaveSuccess(true);
         setTimeout(() => {
-          onClose();
+          if (onRestart) {
+            onRestart();
+          } else {
+            onClose();
+          }
         }, 1500);
       }
     } catch (err: any) {
@@ -369,6 +374,36 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
       newConfig.coding_agent[field] = value;
       return newConfig;
     });
+  };
+
+  const updateModelProfile = (index: number, field: string, value: any) => {
+    setConfig((prev: any) => {
+      const newConfig = { ...prev };
+      if (!newConfig.model_profiles) newConfig.model_profiles = [];
+      newConfig.model_profiles[index] = { ...newConfig.model_profiles[index], [field]: value };
+      return newConfig;
+    });
+  };
+
+  const addModelProfile = () => {
+    setConfig((prev: any) => ({
+      ...prev,
+      model_profiles: [...(prev.model_profiles || []), {
+        profile_name: 'new-profile',
+        model_name: '',
+        tags: [],
+        description: '',
+        temperature: 0.5,
+        max_tokens: 16384,
+      }],
+    }));
+  };
+
+  const removeModelProfile = (index: number) => {
+    setConfig((prev: any) => ({
+      ...prev,
+      model_profiles: (prev.model_profiles || []).filter((_: any, i: number) => i !== index),
+    }));
   };
 
   if (loading) {
@@ -585,23 +620,60 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
                   ))}
                 </Section>
 
-                <Section title="Coder 参数微调">
-                  <SettingRow label="Temperature" description="控制 Coder 编写代码的随机性 (0.0 - 0.2)" border={false}>
-                    <div className="flex items-center gap-3 w-full">
-                      <input type="range" min="0" max="1" step="0.05" value={String(config?.model_profiles?.find((p: any) => p.profile_name === 'Coder')?.temperature || 0.2)} onChange={(e) => {
-                        const val = parseFloat(e.target.value);
-                        const idx = config?.model_profiles?.findIndex((p: any) => p.profile_name === 'Coder');
-                        if (idx >= 0) {
-                          updateNestedConfig(['model_profiles', String(idx), 'temperature'], val);
-                        } else {
-                          setConfig((prev: any) => ({ ...prev, model_profiles: [...(prev.model_profiles || []), { profile_name: 'Coder', temperature: val, max_tokens: 16384 }] }));
-                        }
-                      }} className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-600" />
-                      <span className="w-10 text-right text-sm font-mono text-gray-900 dark:text-gray-100">
-                        {config?.model_profiles?.find((p: any) => p.profile_name === 'Coder')?.temperature || 0.2}
-                      </span>
-                    </div>
-                  </SettingRow>
+                <Section title="Coder Model Profile">
+                  <div className="flex justify-end mb-2">
+                    <button onClick={addModelProfile} className="flex items-center gap-1 text-xs font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white bg-white dark:bg-[#1e1e1e] border border-gray-200 dark:border-gray-800 px-3 py-1.5 rounded-full shadow-sm transition-colors">
+                      <Plus size={14} /> 添加 Profile
+                    </button>
+                  </div>
+                  {(!config?.model_profiles || config.model_profiles.length === 0) ? (
+                    <div className="p-4 text-center text-sm text-gray-500 dark:text-gray-400">暂无 Coder Profile，请添加或从 OOBE 生成</div>
+                  ) : (
+                    config.model_profiles.map((profile: any, idx: number) => (
+                      <div key={idx} className="border-b border-gray-100 dark:border-gray-800/60 last:border-0 p-4 space-y-3 relative group">
+                        <button onClick={() => removeModelProfile(idx)} className="absolute top-4 right-4 p-1.5 text-gray-400 hover:text-red-500 rounded transition-colors opacity-0 group-hover:opacity-100" title="删除 Profile">
+                          <Trash2 size={16} />
+                        </button>
+                        <div className="grid grid-cols-2 gap-4 pr-8">
+                          <div className="flex flex-col gap-1">
+                            <label className="text-xs font-medium text-gray-600 dark:text-gray-400">Profile 名称</label>
+                            <SettingInput value={profile.profile_name || ''} onChange={(e: any) => updateModelProfile(idx, 'profile_name', e.target.value)} placeholder="如: claude-architect" />
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <label className="text-xs font-medium text-gray-600 dark:text-gray-400">模型</label>
+                            <SettingSelect value={profile.model_name || ''} onChange={(e: any) => updateModelProfile(idx, 'model_name', e.target.value)}>
+                              <option value="">-- 跟随 coder 角色 --</option>
+                              {config?.models?.map((m: any) => {
+                                const name = `${m.api_provider}/${m.model_id}`;
+                                return <option key={name} value={name}>{name}</option>;
+                              })}
+                            </SettingSelect>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4 pr-8">
+                          <div className="flex flex-col gap-1">
+                            <label className="text-xs font-medium text-gray-600 dark:text-gray-400">标签 (逗号分隔)</label>
+                            <SettingInput value={(profile.tags || []).join(', ')} onChange={(e: any) => updateModelProfile(idx, 'tags', e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean))} placeholder="如: 后端, 复杂逻辑" />
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <label className="text-xs font-medium text-gray-600 dark:text-gray-400">适用场景描述</label>
+                            <SettingInput value={profile.description || ''} onChange={(e: any) => updateModelProfile(idx, 'description', e.target.value)} placeholder="如: 适合复杂后端架构" />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4 pr-8">
+                          <div className="flex items-center gap-3">
+                            <label className="text-xs font-medium text-gray-600 dark:text-gray-400 shrink-0">Temperature</label>
+                            <input type="range" min="0" max="2" step="0.05" value={String(profile.temperature ?? 0.5)} onChange={(e) => updateModelProfile(idx, 'temperature', parseFloat(e.target.value))} className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-600" />
+                            <span className="w-10 text-right text-sm font-mono text-gray-900 dark:text-gray-100">{profile.temperature ?? 0.5}</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <label className="text-xs font-medium text-gray-600 dark:text-gray-400 shrink-0">Max Tokens</label>
+                            <SettingInput type="number" value={String(profile.max_tokens ?? 16384)} onChange={(e: any) => updateModelProfile(idx, 'max_tokens', parseInt(e.target.value) || 16384)} className="font-mono text-right" />
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </Section>
               </div>
             )}
@@ -714,7 +786,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
         {/* 底部保存条 */}
         <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-800/60 bg-[#f9fafb]/80 dark:bg-[#111111]/80 backdrop-blur-md flex items-center justify-end gap-3 shrink-0 z-10 absolute bottom-0 left-0 right-0">
           {error && <span className="text-red-500 text-sm font-medium flex items-center mr-auto">{error}</span>}
-          {saveSuccess && <span className="text-green-600 dark:text-green-400 text-sm font-medium flex items-center mr-auto animate-in fade-in zoom-in duration-200">✓ 配置已保存，部分修改需重启生效</span>}
+          {saveSuccess && <span className="text-green-600 dark:text-green-400 text-sm font-medium flex items-center mr-auto animate-in fade-in zoom-in duration-200">✓ 配置已保存，正在重启...</span>}
           <button onClick={onClose} className="px-5 py-2 rounded-md text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors">
             取消
           </button>

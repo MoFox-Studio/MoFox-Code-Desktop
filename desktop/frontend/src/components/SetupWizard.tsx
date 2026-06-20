@@ -181,6 +181,10 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
   const [isImporting, setIsImporting] = useState(false);
   const [importSuccess, setImportSuccess] = useState(false);
 
+  // Step 1 — API 测试
+  const [testingProvider, setTestingProvider] = useState<number | null>(null);
+  const [testResult, setTestResult] = useState<Record<number, { ok: boolean; msg: string }>>({});
+
   // Step 2 — Models
   const [models, setModels] = useState<ModelEntry[]>([
     createModelEntry({ model_id: "gpt-4o", api_provider: "OpenAI" }),
@@ -191,6 +195,10 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
         createModelEntry({ model_id: "gpt-4o", api_provider: "OpenAI" }),
       ]),
   );
+
+  // Step 2 — 获取模型
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [fetchResult, setFetchResult] = useState<{ ok: boolean; msg: string; count: number } | null>(null);
 
   // Step 3 — Role defaults
   const [chatModelName, setChatModelName] = useState("");
@@ -557,7 +565,24 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
           reply_style: replyStyle.trim(),
           identity: botIdentity.trim(),
         },
-        model_profiles: [],
+        model_profiles: [
+          {
+            profile_name: 'Default',
+            model_name: chat,
+            tags: ['通用'],
+            description: '默认模型配置',
+            temperature: 0.5,
+            max_tokens: 16384,
+          },
+          {
+            profile_name: 'Coder',
+            model_name: coder,
+            tags: ['编码'],
+            description: '代码编写专用配置',
+            temperature: 0.2,
+            max_tokens: 16384,
+          },
+        ],
         mcp_servers: parsedMcp,
         coding_agent: {
           tui_username: tuiUsername.trim() || "User",
@@ -843,6 +868,43 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
                               </div>
                             </div>
                           </details>
+
+                          <div className="flex items-center gap-3 mt-4">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                setTestingProvider(editingProvider);
+                                setTestResult((prev) => {
+                                  const next = { ...prev };
+                                  delete next[editingProvider!];
+                                  return next;
+                                });
+                                try {
+                                  const p = providers[editingProvider!];
+                                  const res = await fetch(`http://127.0.0.1:${port}/api/test-provider`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ client_type: p.client_type, api_key: p.api_key, base_url: p.base_url }),
+                                  });
+                                  const data = await res.json();
+                                  setTestResult((prev) => ({ ...prev, [editingProvider!]: { ok: data.status === 'ok', msg: data.message } }));
+                                } catch (e: any) {
+                                  setTestResult((prev) => ({ ...prev, [editingProvider!]: { ok: false, msg: e.message || '连接失败' } }));
+                                } finally {
+                                  setTestingProvider(null);
+                                }
+                              }}
+                              disabled={testingProvider !== null || !providers[editingProvider]?.api_key?.trim()}
+                              className="px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50 transition-colors"
+                            >
+                              {testingProvider === editingProvider ? '测试中...' : '测试连接'}
+                            </button>
+                            {testResult[editingProvider!] && (
+                              <span className={`text-xs font-medium ${testResult[editingProvider!].ok ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
+                                {testResult[editingProvider!].msg}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -852,6 +914,61 @@ const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete, port }) => {
                 {/* ══ STEP 2: Models ══ */}
                 {step === 2 && (
                   <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-500 pb-8">
+                    <div className="flex items-center gap-3 mb-2">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (providers.length === 0) return;
+                          setFetchingModels(true);
+                          setFetchResult(null);
+                          try {
+                            let totalAdded = 0;
+                            let lastError = '';
+                            for (const p of providers) {
+                              if (!p.api_key?.trim()) continue;
+                              try {
+                                const res = await fetch(`http://127.0.0.1:${port}/api/fetch-models`, {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ client_type: p.client_type, api_key: p.api_key, base_url: p.base_url }),
+                                });
+                                const data = await res.json();
+                                if (data.status === 'ok' && data.models) {
+                                  const existingIds = new Set(models.map(m => m.model_id));
+                                  const newModels: ModelEntry[] = data.models
+                                    .filter((m: any) => !existingIds.has(m.id))
+                                    .map((m: any) => createModelEntry({ model_id: m.id, api_provider: p.name }));
+                                  if (newModels.length > 0) {
+                                    applyModels([...models, ...newModels]);
+                                    totalAdded += newModels.length;
+                                  }
+                                } else {
+                                  lastError = data.message || '获取失败';
+                                }
+                              } catch (e: any) {
+                                lastError = e.message || '请求失败';
+                              }
+                            }
+                            setFetchResult({
+                              ok: totalAdded > 0,
+                              msg: totalAdded > 0 ? `成功添加 ${totalAdded} 个模型` : (lastError || '未获取到新模型'),
+                              count: totalAdded,
+                            });
+                          } finally {
+                            setFetchingModels(false);
+                          }
+                        }}
+                        disabled={fetchingModels || providers.every(p => !p.api_key?.trim())}
+                        className="w-full py-3 border-2 border-dashed border-blue-300 dark:border-blue-700 rounded-xl text-sm font-medium text-blue-600 dark:text-blue-400 hover:border-blue-500 hover:bg-blue-50/50 dark:hover:bg-blue-900/10 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
+                      >
+                        {fetchingModels ? <><Loader2 size={16} className="animate-spin" /> 正在获取模型列表...</> : <><Sparkles size={16} /> 从 API 获取模型列表</>}
+                      </button>
+                      {fetchResult && (
+                        <span className={`text-xs font-medium ${fetchResult.ok ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
+                          {fetchResult.msg}
+                        </span>
+                      )}
+                    </div>
                     {models.map((m, idx) => (
                       <div key={idx} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 shadow-sm relative group space-y-4">
                         <button onClick={() => removeModel(idx)} className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-red-500 rounded bg-transparent hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors">
