@@ -287,6 +287,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose, onRestart 
 
       // 当供应商名称变更时，同步更新 models.api_provider、roles 和 model_profiles 中的引用
       if (field === 'name' && oldName !== value) {
+        const prefix = `${oldName}/`;
         // 更新 models 中的 api_provider 引用
         if (newConfig.models) {
           newConfig.models = newConfig.models.map((m: any) =>
@@ -295,9 +296,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose, onRestart 
         }
         // 更新 roles 中的 "OldName/modelId" → "NewName/modelId"
         if (newConfig.roles) {
-          const prefix = `${oldName}/`;
           const newRoles: Record<string, string> = {};
-          for (const [role, modelName] of Object.entries(newConfig.roles)) {
+          for (const [role, modelName] of Object.entries(newConfig.roles as Record<string, string>)) {
             if (typeof modelName === 'string' && modelName.startsWith(prefix)) {
               newRoles[role] = `${value}/${modelName.slice(prefix.length)}`;
             } else {
@@ -335,7 +335,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose, onRestart 
           // 更新 roles
           if (newConfig.roles) {
             const newRoles: Record<string, string> = {};
-            for (const [role, modelName] of Object.entries(newConfig.roles)) {
+            for (const [role, modelName] of Object.entries(newConfig.roles as Record<string, string>)) {
               newRoles[role] = modelName === oldName ? newName : modelName;
             }
             newConfig.roles = newRoles;
