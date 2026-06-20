@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -260,13 +261,10 @@ body {
 
 /* Native Window Controls Overlay */
 .shell-window-controls {
-  position: absolute;
-  top: 0;
-  right: 0;
   display: flex;
   align-items: center;
   z-index: 9999;
-  height: 48px;
+  height: 32px;
   background: transparent;
   /* Make sure the controls area doesn't capture drag, only the buttons handle clicks */
   -webkit-app-region: no-drag;
@@ -274,7 +272,7 @@ body {
 
 .shell-window-btn {
   width: 46px;
-  height: 48px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;

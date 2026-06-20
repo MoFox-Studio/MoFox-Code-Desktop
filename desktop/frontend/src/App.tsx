@@ -134,10 +134,44 @@ function App() {
       {appState === 'setup' && <SetupWizard onComplete={handleSetupComplete} port={activePort} />}
       
       {appState === 'main' && (
-        <>
-          <WindowControls />
-          <div className="shell-main-content" style={{ height: '100vh', width: '100vw' }}>
-            <iframe 
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw' }}>
+          {/* Native Title Bar */}
+          <div 
+            data-tauri-drag-region 
+            className="flex items-center shrink-0 border-b border-gray-200"
+            style={{ height: '32px', paddingLeft: '16px', userSelect: 'none', backgroundColor: '#f9fafb' }}
+          >
+            <div className="flex items-center gap-3 pointer-events-none" style={{ flex: 1 }}>
+              <div className="flex items-center justify-center shrink-0 overflow-hidden" style={{ width: '16px', height: '16px', borderRadius: '4px', backgroundColor: '#2563eb' }}>
+                <img src="/logo.png" alt="MoFox" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              </div>
+              <span style={{ fontSize: '12px', fontWeight: 600, color: '#4b5563' }}>MoFox Code</span>
+            </div>
+
+            {/* Settings Button */}
+            <button
+              onClick={() => setShowSettings(true)}
+              style={{
+                WebkitAppRegion: 'no-drag',
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '4px',
+                marginRight: '8px',
+                color: '#6b7280',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              } as React.CSSProperties}
+              title="Settings"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            </button>
+            <WindowControls />
+          </div>
+
+          <div className="shell-main-content" style={{ flex: 1, position: 'relative' }}>
+            <iframe
               id="plugin-iframe"
               src={`http://127.0.0.1:${activePort}/?embedded=1&t=${Date.now()}`} 
               className="plugin-iframe"
@@ -172,7 +206,7 @@ function App() {
               </div>
             )}
           </div>
-        </>
+        </div>
       )}
       {closing && (
         <div className="fixed inset-0 z-[99999] bg-black/60 backdrop-blur-sm flex items-center justify-center">

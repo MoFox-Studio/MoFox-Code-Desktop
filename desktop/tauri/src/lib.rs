@@ -246,7 +246,7 @@ pub fn run() {
                                 std::thread::spawn(move || {
                                     let mut grace_exited = false;
                                     let start = std::time::Instant::now();
-                                    let timeout = std::time::Duration::from_secs(3);
+                                    let timeout = std::time::Duration::from_secs(2);
                                     while start.elapsed() < timeout {
                                         match backend.try_wait() {
                                             Ok(Some(_)) => {
@@ -260,7 +260,7 @@ pub fn run() {
                                         }
                                     }
                                     if !grace_exited {
-                                        eprintln!("[Tauri] Backend did not exit in 3s, killing...");
+                                        eprintln!("[Tauri] Backend did not exit in 2s, killing...");
                                         backend.kill().ok();
                                         backend.wait().ok();
                                     } else {
