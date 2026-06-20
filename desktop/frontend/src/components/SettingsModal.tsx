@@ -13,18 +13,18 @@ const ToggleSwitch = ({ checked, onChange }: { checked: boolean; onChange: (chec
 );
 
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
-  <div className="mb-8">
-    <h3 className="text-[13px] font-semibold text-gray-800 dark:text-gray-200 mb-2 px-1">{title}</h3>
-    <div className="flex flex-col gap-1">
+  <div className="mb-10">
+    <h3 className="text-[16px] font-bold text-gray-900 dark:text-gray-100 mb-4 px-1">{title}</h3>
+    <div className="flex flex-col gap-0">
       {children}
     </div>
   </div>
 );
 
 const SettingRow = ({ label, description, children, border = true }: { label: React.ReactNode, description?: React.ReactNode, children: React.ReactNode, border?: boolean }) => (
-  <div className={`flex items-start justify-between py-3 px-1 ${border ? 'border-b border-gray-100 dark:border-[#2b2b2b]' : ''}`}>
-    <div className="flex flex-col gap-0.5 pr-4 max-w-[65%] mt-0.5">
-      <span className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{label}</span>
+  <div className={`flex items-center justify-between py-4 px-1 ${border ? 'border-b border-gray-100 dark:border-[#2b2b2b]' : ''}`}>
+    <div className="flex flex-col gap-0.5 pr-4 max-w-[65%]">
+      <span className="text-[14px] text-gray-800 dark:text-gray-200">{label}</span>
       {description && <span className="text-xs text-gray-500 dark:text-[#888888]">{description}</span>}
     </div>
     <div className="flex-shrink-0 flex items-center justify-end w-64">
@@ -39,19 +39,62 @@ const SettingInput = ({ value, onChange, placeholder, type = "text", className =
     value={value} 
     onChange={onChange} 
     placeholder={placeholder}
-    className={`w-full px-3 py-1.5 text-sm bg-transparent border border-gray-200 dark:border-gray-700 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none text-gray-900 dark:text-gray-100 transition-colors ${className}`}
+    className={`w-full px-3 py-2 text-[14px] bg-transparent border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-gray-900 dark:text-gray-100 transition-colors shadow-sm ${className}`}
   />
 );
 
-const SettingSelect = ({ value, onChange, children, className = "" }: any) => (
-  <select 
-    value={value} 
-    onChange={onChange} 
-    className={`w-full px-3 py-1.5 text-sm bg-transparent border border-gray-200 dark:border-gray-700 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none text-gray-900 dark:text-gray-100 transition-colors appearance-none ${className}`}
-  >
-    {children}
-  </select>
-);
+const SettingSelect = ({ value, onChange, children, className = "" }: any) => {
+  const [isOpen, setIsOpen] = React.useState(false);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const options = React.Children.toArray(children).filter(child => React.isValidElement(child) && (child as React.ReactElement).type === 'option') as React.ReactElement[];
+  const selectedOption = options.find(opt => opt.props.value === value) || options[0];
+
+  return (
+    <div className={`relative ${className}`} ref={containerRef}>
+      <button 
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full flex items-center justify-between px-3 py-2 text-[14px] bg-transparent border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-gray-900 dark:text-gray-100 transition-colors shadow-sm text-left"
+      >
+        <span className="truncate">{selectedOption?.props.children}</span>
+        <ChevronDown size={14} className={`opacity-50 flex-shrink-0 ml-2 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+      
+      {isOpen && (
+        <div className="absolute z-50 top-full mt-1 w-full bg-white dark:bg-[#2b2b2b] border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-h-60 overflow-auto py-1 animate-in fade-in zoom-in-95 duration-100">
+          {options.map((opt, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => {
+                onChange({ target: { value: opt.props.value } });
+                setIsOpen(false);
+              }}
+              className={`w-full text-left px-3 py-2 text-[13px] transition-colors ${
+                opt.props.value === value 
+                  ? 'bg-blue-50/50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-medium' 
+                  : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#383838]'
+              }`}
+            >
+              {opt.props.children}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 interface SettingsModalProps {
   port: number;
@@ -342,22 +385,21 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
   ];
 
   return (
-    <div className="flex h-full bg-[#f9fafb] dark:bg-[#111111]">
+    <div className="flex h-full bg-white dark:bg-[#1e1e1e]">
       {/* 侧边栏 */}
-      <div className="w-48 border-r border-gray-200 dark:border-[#2b2b2b] bg-gray-50 dark:bg-[#181818] flex flex-col shrink-0">
+      <div className="w-56 bg-white dark:bg-[#1e1e1e] flex flex-col shrink-0 px-2">
         <div className="p-2 pt-4">
           <div className="space-y-0.5">
             {tabs.map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-[13px] font-medium rounded transition-colors ${
+                className={`w-full flex items-center gap-2 px-3 py-2 text-[14px] rounded-full transition-colors ${
                   activeTab === tab.id
-                    ? 'bg-blue-500 text-white shadow-sm'
-                    : 'text-gray-700 dark:text-[#cccccc] hover:bg-gray-200 dark:hover:bg-[#2b2b2b]'
+                    ? 'bg-[#f0f0f0] dark:bg-[#333333] text-gray-900 dark:text-gray-100 font-medium'
+                    : 'text-gray-600 dark:text-[#a0a0a0] hover:bg-gray-50 dark:hover:bg-[#2b2b2b]'
                 }`}
               >
-                <tab.icon size={14} />
                 {tab.label}
               </button>
             ))}
@@ -367,15 +409,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
 
       {/* 内容区 */}
       <div className="flex-1 flex flex-col min-w-0 relative">
-        <div className="flex-1 overflow-y-auto p-6 relative bg-white dark:bg-[#1e1e1e]">
-          <div className="max-w-3xl space-y-6 pb-10">
+        <div className="flex-1 overflow-y-auto p-8 relative bg-white dark:bg-[#1e1e1e]">
+          <div className="max-w-3xl space-y-10 pb-10">
             
             {activeTab === 'general' && (
-              <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <div className="mb-6 border-b border-gray-100 dark:border-[#2b2b2b] pb-2">
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-[#e0e0e0] mb-0.5">常规设置</h2>
-                  <p className="text-[13px] text-gray-500 dark:text-[#888888]">调整助手的基础属性和行为习惯。</p>
-                </div>
+              <div className="animate-in fade-in duration-300">
                 
                 <Section title="身份与称呼">
                   <SettingRow label="AI 昵称 (Nickname)" description="机器人的主要名字，如 MoFox" border={true}>
@@ -404,17 +442,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
             )}
 
             {activeTab === 'models' && (
-              <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <div className="mb-6 border-b border-gray-100 dark:border-[#2b2b2b] pb-2 flex items-end justify-between">
-                  <div>
-                    <h2 className="text-lg font-semibold text-gray-900 dark:text-[#e0e0e0] mb-0.5">模型与 API</h2>
-                    <p className="text-[13px] text-gray-500 dark:text-[#888888]">配置大型语言模型 API 密钥、模型列表及角色绑定。</p>
-                  </div>
+              <div className="animate-in fade-in duration-300">
+                <div className="mb-6 flex justify-end">
                   <div className="flex gap-2">
-                    <button onClick={() => setConfig((prev: any) => ({ ...prev, api_providers: [...prev.api_providers, { name: 'new_provider', client_type: 'openai', api_key: '', base_url: '' }] }))} className="flex items-center gap-1 text-xs font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white bg-white dark:bg-[#1e1e1e] border border-gray-200 dark:border-gray-800 px-3 py-1.5 rounded-md shadow-sm transition-colors">
+                    <button onClick={() => setConfig((prev: any) => ({ ...prev, api_providers: [...prev.api_providers, { name: 'new_provider', client_type: 'openai', api_key: '', base_url: '' }] }))} className="flex items-center gap-1 text-xs font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white bg-white dark:bg-[#1e1e1e] border border-gray-200 dark:border-gray-800 px-3 py-1.5 rounded-full shadow-sm transition-colors">
                       <Plus size={14} /> 添加供应商
                     </button>
-                    <button onClick={addModel} className="flex items-center gap-1 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded-md shadow-sm transition-colors">
+                    <button onClick={addModel} className="flex items-center gap-1 text-xs font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white bg-white dark:bg-[#1e1e1e] border border-gray-200 dark:border-gray-800 px-3 py-1.5 rounded-full shadow-sm transition-colors">
                       <Plus size={14} /> 添加模型
                     </button>
                   </div>
@@ -570,13 +604,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
             )}
 
             {activeTab === 'mcp' && (
-              <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <div className="mb-6 border-b border-gray-100 dark:border-[#2b2b2b] pb-2 flex items-end justify-between">
-                  <div>
-                    <h2 className="text-lg font-semibold text-gray-900 dark:text-[#e0e0e0] mb-0.5">MCP 服务器</h2>
-                    <p className="text-[13px] text-gray-500 dark:text-[#888888]">配置 Model Context Protocol (MCP) 服务器以扩展能力。</p>
-                  </div>
-                  <button onClick={() => setConfig((prev: any) => ({ ...prev, mcp_servers: [...(prev.mcp_servers || []), { name: 'new-server', command: 'npx', args: ['-y', 'mcp-server'], enabled: true }] }))} className="flex items-center gap-1 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded-md shadow-sm transition-colors">
+              <div className="animate-in fade-in duration-300">
+                <div className="mb-6 flex justify-end">
+                  <button onClick={() => setConfig((prev: any) => ({ ...prev, mcp_servers: [...(prev.mcp_servers || []), { name: 'new-server', command: 'npx', args: ['-y', 'mcp-server'], enabled: true }] }))} className="flex items-center gap-1 text-xs font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white bg-white dark:bg-[#1e1e1e] border border-gray-200 dark:border-gray-800 px-3 py-1.5 rounded-full shadow-sm transition-colors">
                     <Plus size={14} /> 添加端点
                   </button>
                 </div>
@@ -616,11 +646,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
             )}
 
             {activeTab === 'advanced' && (
-              <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <div className="mb-6 border-b border-gray-100 dark:border-[#2b2b2b] pb-2">
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-[#e0e0e0] mb-0.5">高级设置</h2>
-                  <p className="text-[13px] text-gray-500 dark:text-[#888888]">配置进阶选项和工作区特定配置。</p>
-                </div>
+              <div className="animate-in fade-in duration-300">
 
                 <Section title="全局参数">
                   <SettingRow label="全局 Temperature" description="控制回答的随机性和创造性 (0.0 - 0.5)" border={true}>
@@ -660,11 +686,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
             )}
 
             {activeTab === 'about' && (
-              <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <div className="mb-6 border-b border-gray-100 dark:border-[#2b2b2b] pb-2">
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-[#e0e0e0] mb-0.5">关于 MoFox Code</h2>
-                  <p className="text-[13px] text-gray-500 dark:text-[#888888]">版本信息与状态</p>
-                </div>
+              <div className="animate-in fade-in duration-300">
                 
                 <Section title="系统信息">
                   {[
