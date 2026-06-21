@@ -140,6 +140,8 @@ def parse_configs(config_dir: str = "config") -> dict[str, Any]:
             "command": cfg.get("command", ""),
             "args": cfg.get("args", []),
             "enabled": name in active_mcp or not active_mcp, # 如果 active_mcp 为空，默认认为是刚导入或者未配置，默认开启
+            "instructions": cfg.get("instructions", ""),
+            "env": cfg.get("env", {}),
         })
 
     # ── Model Profiles ─────────────────────────
@@ -181,6 +183,8 @@ def parse_configs(config_dir: str = "config") -> dict[str, Any]:
             "reply_style": personality.get("reply_style", ""),
             "identity": personality.get("identity", ""),
             "background_story": personality.get("background_story", ""),
+            "safety_guidelines": personality.get("safety_guidelines", []),
+            "negative_behaviors": personality.get("negative_behaviors", []),
         },
         "mcp_servers": mcp_servers,
         "model_profiles": model_profiles,

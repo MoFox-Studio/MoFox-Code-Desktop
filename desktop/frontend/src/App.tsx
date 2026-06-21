@@ -4,7 +4,6 @@ import { listen } from '@tauri-apps/api/event';
 import SplashScreen from './components/SplashScreen';
 import SetupWizard from './components/SetupWizard';
 import SettingsModal from './components/SettingsModal';
-import { X } from 'lucide-react';
 import './index.css';
 
 type AppState = 'booting' | 'setup' | 'main';
@@ -33,6 +32,7 @@ function App() {
   const [activePort, setActivePort] = useState<number>(8681);
   const [showSettings, setShowSettings] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [iframeKey, setIframeKey] = useState(() => Date.now());
 
   useEffect(() => {
     const unlisten = listen('closing-backend', () => {
@@ -48,12 +48,7 @@ function App() {
       } else if (e.data === 'open-settings') {
         setShowSettings(true);
       } else if (e.data === 'refresh-iframe') {
-        const iframe = document.getElementById('plugin-iframe') as HTMLIFrameElement;
-        if (iframe) {
-          const url = new URL(iframe.src);
-          url.searchParams.set('t', Date.now().toString());
-          iframe.src = url.toString();
-        }
+        setIframeKey(Date.now());
       }
     };
     window.addEventListener('message', handleMessage);
@@ -67,7 +62,7 @@ function App() {
       try {
         const status = await invoke<string>('get_backend_status');
         
-        if (status === 'running' || status === 'exited:0') {
+        if (status === 'running') {
           try {
             // Fallback 端口列表：实际端口由 config/webui 决定（默认 8681），
             // 此处扫描仅用于多实例或端口被占用时的兜底发现。
@@ -134,12 +129,46 @@ function App() {
       {appState === 'setup' && <SetupWizard onComplete={handleSetupComplete} port={activePort} />}
       
       {appState === 'main' && (
-        <>
-          <WindowControls />
-          <div className="shell-main-content" style={{ height: '100vh', width: '100vw' }}>
-            <iframe 
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw' }}>
+          {/* Native Title Bar */}
+          <div 
+            data-tauri-drag-region 
+            className="flex items-center shrink-0 border-b border-gray-200"
+            style={{ height: '32px', paddingLeft: '16px', userSelect: 'none', backgroundColor: '#f9fafb' }}
+          >
+            <div className="flex items-center gap-3 pointer-events-none" style={{ flex: 1 }}>
+              <div className="flex items-center justify-center shrink-0 overflow-hidden" style={{ width: '16px', height: '16px', borderRadius: '4px', backgroundColor: '#2563eb' }}>
+                <img src="/logo.png" alt="MoFox" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              </div>
+              <span style={{ fontSize: '12px', fontWeight: 600, color: '#4b5563' }}>MoFox Code</span>
+            </div>
+
+            {/* Settings Button */}
+            <button
+              onClick={() => setShowSettings(true)}
+              style={{
+                WebkitAppRegion: 'no-drag',
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '4px',
+                marginRight: '8px',
+                color: '#6b7280',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              } as React.CSSProperties}
+              title="Settings"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            </button>
+            <WindowControls />
+          </div>
+
+          <div className="shell-main-content" style={{ flex: 1, position: 'relative' }}>
+            <iframe
               id="plugin-iframe"
-              src={`http://127.0.0.1:${activePort}/?embedded=1&t=${Date.now()}`} 
+              src={`http://127.0.0.1:${activePort}/?embedded=1&t=${iframeKey}`} 
               className="plugin-iframe"
               title="MoFox Code WebUI"
               allow="clipboard-read; clipboard-write"
@@ -147,32 +176,25 @@ function App() {
             />
             {showSettings && (
               <div 
-                className="fixed inset-0 z-[10000] bg-black/50 backdrop-blur-sm flex items-center justify-center p-6" 
-                onPointerDown={(e) => {
-                  if (e.target === e.currentTarget) setShowSettings(false);
-                }}
+                className="fixed inset-0 z-[10000] bg-white dark:bg-[#1e1e1e] flex flex-col animate-in fade-in duration-200" 
               >
-                <div 
-                  className="w-[95vw] max-w-6xl h-[90vh] bg-white dark:bg-gray-900 rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200" 
-                  onPointerDown={(e) => e.stopPropagation()}
-                >
-                  <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800/50 shrink-0">
-                    <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">系统设置</h2>
-                    <button 
-                      onClick={() => setShowSettings(false)}
-                      className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-400 transition-colors"
-                    >
-                      <X size={18} />
-                    </button>
-                  </div>
-                  <div className="flex-1 overflow-hidden">
-                    <SettingsModal port={activePort} onClose={() => setShowSettings(false)} />
-                  </div>
+                <div className="flex items-center px-6 py-4 border-b border-gray-100 dark:border-[#2b2b2b] shrink-0 sticky top-0 bg-white dark:bg-[#1e1e1e] z-10">
+                  <button 
+                    onClick={() => setShowSettings(false)}
+                    className="flex items-center gap-2 text-gray-600 dark:text-[#cccccc] hover:text-gray-900 dark:hover:text-white transition-colors"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+                    <span className="font-medium text-[15px]">Settings</span>
+                  </button>
+                  <div className="flex-1"></div>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  <SettingsModal port={activePort} onClose={() => setShowSettings(false)} onRestart={handleSetupComplete} />
                 </div>
               </div>
             )}
           </div>
-        </>
+        </div>
       )}
       {closing && (
         <div className="fixed inset-0 z-[99999] bg-black/60 backdrop-blur-sm flex items-center justify-center">

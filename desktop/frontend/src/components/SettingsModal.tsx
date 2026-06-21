@@ -1,9 +1,108 @@
 import React, { useState, useEffect } from 'react';
 import { User, Cpu, Network, RefreshCw, Plus, Trash2, Settings as SettingsIcon, Info, ChevronDown, ChevronRight } from 'lucide-react';
 
+const ToggleSwitch = ({ checked, onChange }: { checked: boolean; onChange: (checked: boolean) => void }) => (
+  <button 
+    type="button"
+    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${checked ? 'bg-blue-500' : 'bg-gray-200 dark:bg-gray-700'}`}
+    onClick={() => onChange(!checked)}
+  >
+    <span className="sr-only">Toggle</span>
+    <span aria-hidden="true" className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${checked ? 'translate-x-2' : '-translate-x-2'}`} />
+  </button>
+);
+
+const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
+  <div className="mb-10">
+    <h3 className="text-[16px] font-bold text-gray-900 dark:text-gray-100 mb-4 px-1">{title}</h3>
+    <div className="flex flex-col gap-0">
+      {children}
+    </div>
+  </div>
+);
+
+const SettingRow = ({ label, description, children, border = true }: { label: React.ReactNode, description?: React.ReactNode, children: React.ReactNode, border?: boolean }) => (
+  <div className={`flex items-center justify-between py-4 px-1 ${border ? 'border-b border-gray-100 dark:border-[#2b2b2b]' : ''}`}>
+    <div className="flex flex-col gap-0.5 pr-4 max-w-[65%]">
+      <span className="text-[14px] text-gray-800 dark:text-gray-200">{label}</span>
+      {description && <span className="text-xs text-gray-500 dark:text-[#888888]">{description}</span>}
+    </div>
+    <div className="flex-shrink-0 flex items-center justify-end w-64">
+      {children}
+    </div>
+  </div>
+);
+
+const SettingInput = ({ value, onChange, placeholder, type = "text", className = "" }: any) => (
+  <input 
+    type={type} 
+    value={value} 
+    onChange={onChange} 
+    placeholder={placeholder}
+    className={`w-full px-3 py-2 text-[14px] bg-transparent border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-gray-900 dark:text-gray-100 transition-colors shadow-sm ${className}`}
+  />
+);
+
+const SettingSelect = ({ value, onChange, children, className = "" }: any) => {
+  const [isOpen, setIsOpen] = React.useState(false);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const options = React.Children.toArray(children).filter(
+    (child): child is React.ReactElement<React.OptionHTMLAttributes<HTMLOptionElement>, 'option'> =>
+      React.isValidElement<React.OptionHTMLAttributes<HTMLOptionElement>>(child) && child.type === 'option',
+  );
+  const selectedOption = options.find(opt => opt.props.value === value) || options[0];
+
+  return (
+    <div className={`relative ${className}`} ref={containerRef}>
+      <button 
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full flex items-center justify-between px-3 py-2 text-[14px] bg-transparent border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-gray-900 dark:text-gray-100 transition-colors shadow-sm text-left"
+      >
+        <span className="truncate">{selectedOption?.props.children}</span>
+        <ChevronDown size={14} className={`opacity-50 flex-shrink-0 ml-2 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+      
+      {isOpen && (
+        <div className="absolute z-50 top-full mt-1 w-full bg-white dark:bg-[#2b2b2b] border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-h-60 overflow-auto py-1 animate-in fade-in zoom-in-95 duration-100">
+          {options.map((opt, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => {
+                onChange({ target: { value: opt.props.value } });
+                setIsOpen(false);
+              }}
+              className={`w-full text-left px-3 py-2 text-[13px] transition-colors ${
+                opt.props.value === value 
+                  ? 'bg-blue-50/50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-medium' 
+                  : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#383838]'
+              }`}
+            >
+              {opt.props.children}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 interface SettingsModalProps {
   port: number;
   onClose: () => void;
+  onRestart?: () => void;
 }
 
 const buildExtraParamsTextMap = (models: any[] = []) =>
@@ -66,7 +165,7 @@ const parseNullableNumberValue = (value: unknown) => {
   return Number.isNaN(parsed) ? null : parsed;
 };
 
-const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
+const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose, onRestart }) => {
   const [activeTab, setActiveTab] = useState('general');
   const [config, setConfig] = useState<any>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -153,7 +252,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
       } else {
         setSaveSuccess(true);
         setTimeout(() => {
-          onClose();
+          if (onRestart) {
+            onRestart();
+          } else {
+            onClose();
+          }
         }, 1500);
       }
     } catch (err: any) {
@@ -179,7 +282,41 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
   const updateProvider = (index: number, field: string, value: string) => {
     setConfig((prev: any) => {
       const newConfig = { ...prev };
+      const oldName = newConfig.api_providers[index][field];
       newConfig.api_providers[index][field] = value;
+
+      // 当供应商名称变更时，同步更新 models.api_provider、roles 和 model_profiles 中的引用
+      if (field === 'name' && oldName !== value) {
+        const prefix = `${oldName}/`;
+        // 更新 models 中的 api_provider 引用
+        if (newConfig.models) {
+          newConfig.models = newConfig.models.map((m: any) =>
+            m.api_provider === oldName ? { ...m, api_provider: value } : m
+          );
+        }
+        // 更新 roles 中的 "OldName/modelId" → "NewName/modelId"
+        if (newConfig.roles) {
+          const newRoles: Record<string, string> = {};
+          for (const [role, modelName] of Object.entries(newConfig.roles as Record<string, string>)) {
+            if (typeof modelName === 'string' && modelName.startsWith(prefix)) {
+              newRoles[role] = `${value}/${modelName.slice(prefix.length)}`;
+            } else {
+              newRoles[role] = modelName;
+            }
+          }
+          newConfig.roles = newRoles;
+        }
+        // 更新 model_profiles 中的 model_name
+        if (newConfig.model_profiles) {
+          newConfig.model_profiles = newConfig.model_profiles.map((mp: any) => {
+            if (typeof mp.model_name === 'string' && mp.model_name.startsWith(prefix)) {
+              return { ...mp, model_name: `${value}/${mp.model_name.slice(prefix.length)}` };
+            }
+            return mp;
+          });
+        }
+      }
+
       return newConfig;
     });
   };
@@ -187,7 +324,31 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
   const updateModel = (index: number, field: string, value: any) => {
     setConfig((prev: any) => {
       const newConfig = { ...prev };
-      newConfig.models[index][field] = value;
+      const oldModel = { ...newConfig.models[index] };
+      newConfig.models[index] = { ...oldModel, [field]: value };
+
+      // 当 model_id 或 api_provider 变更时，同步更新 roles 和 model_profiles 中的引用
+      if (field === 'model_id' || field === 'api_provider') {
+        const oldName = `${oldModel.api_provider}/${oldModel.model_id}`;
+        const newName = `${newConfig.models[index].api_provider}/${newConfig.models[index].model_id}`;
+        if (oldName !== newName && oldModel.model_id && oldModel.api_provider) {
+          // 更新 roles
+          if (newConfig.roles) {
+            const newRoles: Record<string, string> = {};
+            for (const [role, modelName] of Object.entries(newConfig.roles as Record<string, string>)) {
+              newRoles[role] = modelName === oldName ? newName : modelName;
+            }
+            newConfig.roles = newRoles;
+          }
+          // 更新 model_profiles
+          if (newConfig.model_profiles) {
+            newConfig.model_profiles = newConfig.model_profiles.map((mp: any) =>
+              mp.model_name === oldName ? { ...mp, model_name: newName } : mp
+            );
+          }
+        }
+      }
+
       return newConfig;
     });
   };
@@ -273,6 +434,36 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
     });
   };
 
+  const updateModelProfile = (index: number, field: string, value: any) => {
+    setConfig((prev: any) => {
+      const newConfig = { ...prev };
+      if (!newConfig.model_profiles) newConfig.model_profiles = [];
+      newConfig.model_profiles[index] = { ...newConfig.model_profiles[index], [field]: value };
+      return newConfig;
+    });
+  };
+
+  const addModelProfile = () => {
+    setConfig((prev: any) => ({
+      ...prev,
+      model_profiles: [...(prev.model_profiles || []), {
+        profile_name: 'new-profile',
+        model_name: '',
+        tags: [],
+        description: '',
+        temperature: 0.5,
+        max_tokens: 16384,
+      }],
+    }));
+  };
+
+  const removeModelProfile = (index: number) => {
+    setConfig((prev: any) => ({
+      ...prev,
+      model_profiles: (prev.model_profiles || []).filter((_: any, i: number) => i !== index),
+    }));
+  };
+
   if (loading) {
     return <div className="flex items-center justify-center h-full"><RefreshCw className="animate-spin text-blue-500 w-8 h-8" /></div>;
   }
@@ -290,23 +481,21 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
   ];
 
   return (
-    <div className="flex h-full bg-white dark:bg-gray-950">
+    <div className="flex h-full bg-white dark:bg-[#1e1e1e]">
       {/* 侧边栏 */}
-      <div className="w-56 border-r border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30 flex flex-col shrink-0">
-        <div className="p-4 pt-5">
-          <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">设置类别</h3>
-          <div className="space-y-1">
+      <div className="w-56 bg-white dark:bg-[#1e1e1e] flex flex-col shrink-0 px-2">
+        <div className="p-2 pt-4">
+          <div className="space-y-0.5">
             {tabs.map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
+                className={`w-full flex items-center gap-2 px-3 py-2 text-[14px] rounded-full transition-colors ${
                   activeTab === tab.id
-                    ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 shadow-sm'
-                    : 'text-gray-700 dark:text-gray-300 hover:bg-gray-200/50 dark:hover:bg-gray-800/80'
+                    ? 'bg-[#f0f0f0] dark:bg-[#333333] text-gray-900 dark:text-gray-100 font-medium'
+                    : 'text-gray-600 dark:text-[#a0a0a0] hover:bg-gray-50 dark:hover:bg-[#2b2b2b]'
                 }`}
               >
-                <tab.icon size={16} />
                 {tab.label}
               </button>
             ))}
@@ -316,395 +505,336 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
 
       {/* 内容区 */}
       <div className="flex-1 flex flex-col min-w-0 relative">
-        <div className="flex-1 overflow-y-auto p-6 lg:p-8 relative">
-          <div className="max-w-4xl mx-auto space-y-6 pb-10">
+        <div className="flex-1 overflow-y-auto p-8 relative bg-white dark:bg-[#1e1e1e]">
+          <div className="max-w-3xl space-y-10 pb-10">
             
             {activeTab === 'general' && (
-              <div className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">常规设置</h2>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">调整助手的基础属性和行为习惯。</p>
-                </div>
+              <div className="animate-in fade-in duration-300">
                 
-                <div className="space-y-4">
-                  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5 shadow-sm space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-1.5">
-                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">AI 昵称 (Nickname)</label>
-                        <input type="text" value={config?.personality?.nickname || ''} onChange={(e) => updateNestedConfig(['personality', 'nickname'], e.target.value)} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm bg-gray-50 dark:bg-gray-950 focus:ring-2 focus:ring-blue-500/50 outline-none" placeholder="例如: MoFox" />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">别名 (Alias Names)</label>
-                        <input type="text" value={config?.personality?.alias_names?.join(', ') || ''} onChange={(e) => updateNestedConfig(['personality', 'alias_names'], e.target.value.split(',').map(s => s.trim()).filter(Boolean))} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm bg-gray-50 dark:bg-gray-950 focus:ring-2 focus:ring-blue-500/50 outline-none" placeholder="例如: 小狐狸, 莫狐" />
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5 shadow-sm space-y-4">
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-gray-700 dark:text-gray-300">身份设定 (System Identity)</label>
-                      <textarea value={config?.personality?.identity || ''} onChange={(e) => updateNestedConfig(['personality', 'identity'], e.target.value)} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm bg-gray-50 dark:bg-gray-950 focus:ring-2 focus:ring-blue-500/50 outline-none resize-none" placeholder="描述 AI 的背景和基础系统设定" />
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-1.5">
-                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">核心设定 (Core)</label>
-                        <textarea value={config?.personality?.personality_core || ''} onChange={(e) => updateNestedConfig(['personality', 'personality_core'], e.target.value)} rows={3} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm bg-gray-50 dark:bg-gray-950 focus:ring-2 focus:ring-blue-500/50 outline-none resize-none" placeholder="AI 的核心性格设定" />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">扩展设定 (Side)</label>
-                        <textarea value={config?.personality?.personality_side || ''} onChange={(e) => updateNestedConfig(['personality', 'personality_side'], e.target.value)} rows={3} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm bg-gray-50 dark:bg-gray-950 focus:ring-2 focus:ring-blue-500/50 outline-none resize-none" placeholder="AI 的扩展细节、口头禅等" />
-                      </div>
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-gray-700 dark:text-gray-300">回复风格 (Reply Style)</label>
-                      <input type="text" value={config?.personality?.reply_style || ''} onChange={(e) => updateNestedConfig(['personality', 'reply_style'], e.target.value)} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm bg-gray-50 dark:bg-gray-950 focus:ring-2 focus:ring-blue-500/50 outline-none" placeholder="例如: 自然口语化" />
-                    </div>
-                  </div>
-                </div>
+                <Section title="身份与称呼">
+                  <SettingRow label="AI 昵称 (Nickname)" description="机器人的主要名字，如 MoFox" border={true}>
+                    <SettingInput value={config?.personality?.nickname || ''} onChange={(e: any) => updateNestedConfig(['personality', 'nickname'], e.target.value)} placeholder="例如: MoFox" />
+                  </SettingRow>
+                  <SettingRow label="别名 (Alias Names)" description="机器人的其他名字，逗号分隔" border={false}>
+                    <SettingInput value={config?.personality?.alias_names?.join(', ') || ''} onChange={(e: any) => updateNestedConfig(['personality', 'alias_names'], e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean))} placeholder="例如: 小狐狸, 莫狐" />
+                  </SettingRow>
+                </Section>
+                
+                <Section title="性格设定">
+                  <SettingRow label="身份设定 (System Identity)" description="描述 AI 的背景和基础系统设定" border={true}>
+                    <textarea value={config?.personality?.identity || ''} onChange={(e) => updateNestedConfig(['personality', 'identity'], e.target.value)} rows={2} className="w-full px-3 py-1.5 text-sm bg-transparent border border-gray-200 dark:border-gray-700 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none text-gray-900 dark:text-gray-100 transition-colors resize-none" placeholder="描述 AI 的背景和基础系统设定" />
+                  </SettingRow>
+                  <SettingRow label="核心设定 (Core)" description="AI 的核心性格设定" border={true}>
+                    <textarea value={config?.personality?.personality_core || ''} onChange={(e) => updateNestedConfig(['personality', 'personality_core'], e.target.value)} rows={3} className="w-full px-3 py-1.5 text-sm bg-transparent border border-gray-200 dark:border-gray-700 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none text-gray-900 dark:text-gray-100 transition-colors resize-none" placeholder="AI 的核心性格设定" />
+                  </SettingRow>
+                  <SettingRow label="扩展设定 (Side)" description="AI 的扩展细节、口头禅等" border={true}>
+                    <textarea value={config?.personality?.personality_side || ''} onChange={(e) => updateNestedConfig(['personality', 'personality_side'], e.target.value)} rows={3} className="w-full px-3 py-1.5 text-sm bg-transparent border border-gray-200 dark:border-gray-700 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none text-gray-900 dark:text-gray-100 transition-colors resize-none" placeholder="AI 的扩展细节、口头禅等" />
+                  </SettingRow>
+                  <SettingRow label="回复风格 (Reply Style)" border={false}>
+                    <SettingInput value={config?.personality?.reply_style || ''} onChange={(e: any) => updateNestedConfig(['personality', 'reply_style'], e.target.value)} placeholder="例如: 自然口语化" />
+                  </SettingRow>
+                </Section>
               </div>
             )}
 
             {activeTab === 'models' && (
-              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">模型与 API</h2>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">配置大型语言模型 API 密钥、模型列表及角色绑定。</p>
-                </div>
-
-                {/* Providers */}
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-gray-900 dark:text-white">API 供应商</h3>
-                    <button onClick={() => setConfig((prev: any) => ({ ...prev, api_providers: [...prev.api_providers, { name: 'new_provider', client_type: 'openai', api_key: '', base_url: '' }] }))} className="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400 font-medium hover:underline px-2 bg-blue-50 dark:bg-blue-900/30 py-1 rounded">
+              <div className="animate-in fade-in duration-300">
+                <div className="mb-6 flex justify-end">
+                  <div className="flex gap-2">
+                    <button onClick={() => setConfig((prev: any) => ({ ...prev, api_providers: [...prev.api_providers, { name: 'new_provider', client_type: 'openai', api_key: '', base_url: '' }] }))} className="flex items-center gap-1 text-xs font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white bg-white dark:bg-[#1e1e1e] border border-gray-200 dark:border-gray-800 px-3 py-1.5 rounded-full shadow-sm transition-colors">
                       <Plus size={14} /> 添加供应商
                     </button>
-                  </div>
-                  
-                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                    {config?.api_providers?.map((provider: any, idx: number) => (
-                      <div key={idx} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 shadow-sm relative group">
-                        {config.api_providers.length > 1 && (
-                          <button onClick={() => setConfig((prev: any) => { const newConfig = { ...prev }; newConfig.api_providers.splice(idx, 1); return newConfig; })} className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded transition-colors opacity-0 group-hover:opacity-100" title="删除供应商">
-                            <Trash2 size={14} />
-                          </button>
-                        )}
-                        <div className="grid grid-cols-2 gap-3 mb-3 pr-8">
-                          <div className="space-y-1">
-                            <label className="text-[11px] font-semibold text-gray-500 uppercase">供应商名称</label>
-                            <input type="text" value={provider.name} onChange={(e) => updateProvider(idx, 'name', e.target.value)} className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-gray-700 rounded-md text-sm bg-gray-50 dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none" />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-[11px] font-semibold text-gray-500 uppercase">客户端类型</label>
-                            <select value={provider.client_type} onChange={(e) => updateProvider(idx, 'client_type', e.target.value)} className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-gray-700 rounded-md text-sm bg-gray-50 dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none">
-                              <option value="openai">OpenAI 兼容</option>
-                              <option value="anthropic">Anthropic</option>
-                              <option value="google">Google</option>
-                            </select>
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div className="space-y-1">
-                            <label className="text-[11px] font-semibold text-gray-500 uppercase">API Key</label>
-                            <input type="password" value={provider.api_key} onChange={(e) => updateProvider(idx, 'api_key', e.target.value)} className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-gray-700 rounded-md text-sm bg-gray-50 dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none font-mono" placeholder="sk-..." />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-[11px] font-semibold text-gray-500 uppercase">Base URL (选填)</label>
-                            <input type="text" value={provider.base_url} onChange={(e) => updateProvider(idx, 'base_url', e.target.value)} className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-gray-700 rounded-md text-sm bg-gray-50 dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none font-mono" placeholder="默认" />
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Models */}
-                <div className="space-y-3 pt-4 border-t border-gray-100 dark:border-gray-800">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-gray-900 dark:text-white">可用模型列表</h3>
-                    <button onClick={addModel} className="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400 font-medium hover:underline px-2 bg-blue-50 dark:bg-blue-900/30 py-1 rounded">
+                    <button onClick={addModel} className="flex items-center gap-1 text-xs font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white bg-white dark:bg-[#1e1e1e] border border-gray-200 dark:border-gray-800 px-3 py-1.5 rounded-full shadow-sm transition-colors">
                       <Plus size={14} /> 添加模型
                     </button>
                   </div>
-                  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl shadow-sm overflow-hidden text-sm">
-                    <div className="grid grid-cols-12 bg-gray-50 dark:bg-gray-800/50 px-4 py-2 border-b border-gray-200 dark:border-gray-800 text-xs font-semibold text-gray-500 uppercase">
-                      <div className="col-span-1"></div>
-                      <div className="col-span-4">模型 ID</div>
-                      <div className="col-span-3">服务商</div>
-                      <div className="col-span-3">最大上下文</div>
-                      <div className="col-span-1 text-right">操作</div>
-                    </div>
-                    {config?.models?.map((model: any, idx: number) => (
-                      <React.Fragment key={idx}>
-                        <div className="grid grid-cols-12 gap-3 px-4 py-2.5 items-center border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50/50 dark:hover:bg-gray-800/30">
-                          <div className="col-span-1">
-                            <button onClick={() => setExpandedModel(expandedModel === idx ? null : idx)} className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded transition-colors">
-                              {expandedModel === idx ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                            </button>
-                          </div>
-                          <div className="col-span-4">
-                            <input type="text" value={model.model_id} onChange={(e) => updateModel(idx, 'model_id', e.target.value)} className="w-full px-2 py-1 border border-transparent hover:border-gray-300 dark:hover:border-gray-700 focus:border-blue-500 rounded bg-transparent outline-none transition-colors" placeholder="gpt-4o" />
-                          </div>
-                          <div className="col-span-3">
-                            <select value={model.api_provider} onChange={(e) => updateModel(idx, 'api_provider', e.target.value)} className="w-full px-2 py-1 border border-transparent hover:border-gray-300 dark:hover:border-gray-700 focus:border-blue-500 rounded bg-transparent outline-none transition-colors">
-                              {config.api_providers?.map((p: any) => <option key={p.name} value={p.name}>{p.name}</option>)}
-                            </select>
-                          </div>
-                          <div className="col-span-3">
-                            <input type="text" value={model.max_context || ''} onChange={(e) => updateModel(idx, 'max_context', e.target.value)} className="w-full px-2 py-1 border border-transparent hover:border-gray-300 dark:hover:border-gray-700 focus:border-blue-500 rounded bg-transparent outline-none transition-colors" placeholder="如 128k" />
-                          </div>
-                          <div className="col-span-1 text-right">
-                            <button onClick={() => removeModel(idx)} className="p-1.5 text-gray-400 hover:text-red-500 rounded hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors">
-                              <Trash2 size={15} />
-                            </button>
-                          </div>
+                </div>
+
+                <Section title="API 供应商">
+                  {config?.api_providers?.map((provider: any, idx: number) => (
+                    <div key={idx} className="border-b border-gray-100 dark:border-gray-800/60 last:border-0 relative group p-4 space-y-4">
+                      {config.api_providers.length > 1 && (
+                        <button onClick={() => setConfig((prev: any) => { const newConfig = { ...prev }; newConfig.api_providers.splice(idx, 1); return newConfig; })} className="absolute top-4 right-4 p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded transition-colors opacity-0 group-hover:opacity-100" title="删除供应商">
+                          <Trash2 size={16} />
+                        </button>
+                      )}
+                      <div className="grid grid-cols-2 gap-4 pr-10">
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs font-medium text-gray-600 dark:text-gray-400">供应商名称</label>
+                          <SettingInput value={provider.name} onChange={(e: any) => updateProvider(idx, 'name', e.target.value)} />
                         </div>
-                        {expandedModel === idx && (
-                          <div className="px-10 py-4 bg-gray-50/50 dark:bg-gray-800/20 border-b border-gray-100 dark:border-gray-800 space-y-4">
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                              <div className="space-y-1.5">
-                                <label className="text-[11px] font-semibold text-gray-500 uppercase">输入价格 ($/M Tokens)</label>
-                                <input type="text" value={model.price_in ?? ''} onChange={(e) => updateModel(idx, 'price_in', e.target.value)} className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-gray-700 rounded-md text-sm bg-white dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="0.0" />
-                              </div>
-                              <div className="space-y-1.5">
-                                <label className="text-[11px] font-semibold text-gray-500 uppercase">输出价格 ($/M Tokens)</label>
-                                <input type="text" value={model.price_out ?? ''} onChange={(e) => updateModel(idx, 'price_out', e.target.value)} className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-gray-700 rounded-md text-sm bg-white dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="0.0" />
-                              </div>
-                              <div className="space-y-1.5">
-                                <label className="text-[11px] font-semibold text-gray-500 uppercase">缓存命中输入价</label>
-                                <input type="text" value={model.cache_hit_price_in ?? ''} onChange={(e) => updateModel(idx, 'cache_hit_price_in', e.target.value)} className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-gray-700 rounded-md text-sm bg-white dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="留空则使用输入价格" />
-                              </div>
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                              <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
-                                <input type="checkbox" checked={model.force_stream_mode === true} onChange={(e) => updateModel(idx, 'force_stream_mode', e.target.checked)} className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500" />
-                                强制流式模式
-                              </label>
-                              <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
-                                <input type="checkbox" checked={model.tool_call_compat === true} onChange={(e) => updateModel(idx, 'tool_call_compat', e.target.checked)} className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500" />
-                                工具调用兼容
-                              </label>
-                              <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
-                                <input type="checkbox" checked={model.anti_truncation === true} onChange={(e) => updateModel(idx, 'anti_truncation', e.target.checked)} className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500" />
-                                防截断
-                              </label>
-                            </div>
-                            <div className="space-y-1.5">
-                              <label className="text-[11px] font-semibold text-gray-500 uppercase">Extra Params (JSON)</label>
-                              <textarea
-                                value={modelExtraParamsText[idx] ?? JSON.stringify(model.extra_params ?? {}, null, 2)}
-                                onChange={(e) => updateModelExtraParamsText(idx, e.target.value)}
-                                rows={4}
-                                className={`w-full px-3 py-2 border rounded-lg text-xs font-mono bg-white dark:bg-gray-950 outline-none focus:ring-1 ${
-                                  hasInvalidExtraParams(idx)
-                                    ? 'border-red-300 dark:border-red-700 focus:ring-red-500'
-                                    : 'border-gray-300 dark:border-gray-700 focus:ring-blue-500'
-                                }`}
-                                placeholder='{"reasoning_effort":"high"}'
-                              />
-                              <p className={`text-[11px] ${hasInvalidExtraParams(idx) ? 'text-red-500' : 'text-gray-500 dark:text-gray-400'}`}>
-                                {hasInvalidExtraParams(idx)
-                                  ? 'JSON 格式无效，保存前请修正。'
-                                  : '将原样写入 model.toml 的 extra_params 字段。'}
-                              </p>
-                            </div>
-                          </div>
-                        )}
-                      </React.Fragment>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Roles */}
-                <div className="space-y-3 pt-4 border-t border-gray-100 dark:border-gray-800">
-                  <h3 className="text-sm font-semibold text-gray-900 dark:text-white">角色绑定 (Role Assignments)</h3>
-                  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 shadow-sm">
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {['main', 'coder', 'researcher', 'reviewer', 'title'].map((role) => (
-                        <div key={role} className="flex flex-col space-y-1.5">
-                          <label className="text-xs font-semibold text-gray-500 uppercase">{role}</label>
-                          <select value={config?.roles?.[role] || ''} onChange={(e) => updateNestedConfig(['roles', role], e.target.value)} className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-gray-700 rounded-md text-sm bg-gray-50 dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none">
-                            <option value="">-- 默认跟随 main --</option>
-                            {config?.models?.map((m: any) => {
-                              const name = `${m.api_provider}/${m.model_id}`;
-                              return <option key={name} value={name}>{name}</option>;
-                            })}
-                          </select>
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs font-medium text-gray-600 dark:text-gray-400">客户端类型</label>
+                          <SettingSelect value={provider.client_type} onChange={(e: any) => updateProvider(idx, 'client_type', e.target.value)}>
+                            <option value="openai">OpenAI 兼容</option>
+                            <option value="anthropic">Anthropic</option>
+                            <option value="google">Google</option>
+                          </SettingSelect>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Coder Profile */}
-                <div className="space-y-3 pt-4 border-t border-gray-100 dark:border-gray-800">
-                  <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Coder 参数微调</h3>
-                  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 shadow-sm flex items-center gap-6">
-                    <div className="flex-1">
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Temperature</label>
-                      <p className="text-[11px] text-gray-500">控制 Coder 编写代码的随机性 (建议 0.0 - 0.2)</p>
-                    </div>
-                    <div className="flex items-center gap-3 w-64">
-                      <input type="range" min="0" max="1" step="0.05" value={String(config?.model_profiles?.find((p: any) => p.profile_name === 'Coder')?.temperature || 0.2)} onChange={(e) => {
-                        const val = parseFloat(e.target.value);
-                        const idx = config?.model_profiles?.findIndex((p: any) => p.profile_name === 'Coder');
-                        if (idx >= 0) {
-                          updateNestedConfig(['model_profiles', String(idx), 'temperature'], val);
-                        } else {
-                          setConfig((prev: any) => ({ ...prev, model_profiles: [...(prev.model_profiles || []), { profile_name: 'Coder', temperature: val, max_tokens: 16384 }] }));
-                        }
-                      }} className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-600" />
-                      <span className="w-10 text-right text-sm font-mono font-medium text-blue-600 dark:text-blue-400">
-                        {config?.model_profiles?.find((p: any) => p.profile_name === 'Coder')?.temperature || 0.2}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {activeTab === 'mcp' && (
-              <div className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">MCP 服务器</h2>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">配置 Model Context Protocol 扩展工具端点。</p>
-                  </div>
-                  <button onClick={() => setConfig((prev: any) => ({ ...prev, mcp_servers: [...(prev.mcp_servers || []), { name: 'new-server', command: 'npx', args: ['-y', 'mcp-server'], enabled: true }] }))} className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors">
-                    <Plus size={16} /> 添加端点
-                  </button>
-                </div>
-
-                <div className="space-y-3">
-                  {config?.mcp_servers?.map((server: any, idx: number) => (
-                    <div key={idx} className={`bg-white dark:bg-gray-900 border ${server.enabled !== false ? 'border-blue-200/50 dark:border-blue-900/30 shadow-sm' : 'border-gray-200 dark:border-gray-800 opacity-75'} rounded-xl p-4 transition-all flex flex-col gap-3 group relative`}>
-                      
-                      <button onClick={() => setConfig((prev: any) => { const newConfig = { ...prev }; newConfig.mcp_servers.splice(idx, 1); return newConfig; })} className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-red-500 rounded transition-colors opacity-0 group-hover:opacity-100 hover:bg-red-50 dark:hover:bg-red-900/20">
-                        <Trash2 size={16} />
-                      </button>
-
-                      <div className="flex items-center gap-3 pr-8">
-                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                          <input type="checkbox" className="sr-only peer" checked={server.enabled !== false} onChange={(e) => updateMcpServer(idx, 'enabled', e.target.checked)} />
-                          <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                        </label>
-                        <input type="text" value={server.name} onChange={(e) => updateMcpServer(idx, 'name', e.target.value)} className={`text-sm font-semibold bg-transparent outline-none focus:border-b border-gray-300 dark:border-gray-600 flex-1 ${server.enabled !== false ? 'text-gray-900 dark:text-white' : 'text-gray-500 line-through'}`} placeholder="服务器名称" />
-                      </div>
-
-                      <div className="grid grid-cols-12 gap-3">
-                        <div className="col-span-3">
-                          <label className="block text-[11px] font-semibold text-gray-500 uppercase mb-1">Command</label>
-                          <input type="text" value={server.command} onChange={(e) => updateMcpServer(idx, 'command', e.target.value)} className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-950 text-sm focus:ring-1 focus:ring-blue-500 outline-none" placeholder="e.g. npx" disabled={server.enabled === false} />
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs font-medium text-gray-600 dark:text-gray-400">API Key</label>
+                          <SettingInput type="password" value={provider.api_key} onChange={(e: any) => updateProvider(idx, 'api_key', e.target.value)} placeholder="sk-..." className="font-mono text-xs" />
                         </div>
-                        <div className="col-span-9">
-                          <label className="block text-[11px] font-semibold text-gray-500 uppercase mb-1">Args (空格分隔)</label>
-                          <input type="text" value={Array.isArray(server.args) ? server.args.join(' ') : server.args} onChange={(e) => { const arr = e.target.value.split(' ').filter(Boolean); updateMcpServer(idx, 'args', arr); }} className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-950 text-sm font-mono focus:ring-1 focus:ring-blue-500 outline-none" placeholder="-y @modelcontextprotocol/server-postgres" disabled={server.enabled === false} />
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs font-medium text-gray-600 dark:text-gray-400">Base URL (选填)</label>
+                          <SettingInput value={provider.base_url} onChange={(e: any) => updateProvider(idx, 'base_url', e.target.value)} placeholder="默认" className="font-mono text-xs" />
                         </div>
                       </div>
                     </div>
                   ))}
-                  
-                  {(!config?.mcp_servers || config.mcp_servers.length === 0) && (
-                    <div className="text-center py-10 border border-dashed border-gray-300 dark:border-gray-700 rounded-xl bg-gray-50/50 dark:bg-gray-900/20">
-                      <p className="text-sm text-gray-500 dark:text-gray-400">暂未配置任何 MCP 服务器。</p>
+                </Section>
+
+                <Section title="可用模型列表">
+                  {config?.models?.map((model: any, idx: number) => (
+                    <div key={idx} className="border-b border-gray-100 dark:border-gray-800/60 last:border-0 relative">
+                      <div className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50/50 dark:hover:bg-[#252526]/30 transition-colors">
+                        <button onClick={() => setExpandedModel(expandedModel === idx ? null : idx)} className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded transition-colors flex-shrink-0">
+                          {expandedModel === idx ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                        </button>
+                        <div className="flex-1 grid grid-cols-12 gap-3">
+                          <div className="col-span-5 flex items-center gap-2">
+                            <span className="text-xs font-medium text-gray-500 w-6 shrink-0">ID</span>
+                            <SettingInput value={model.model_id} onChange={(e: any) => updateModel(idx, 'model_id', e.target.value)} placeholder="gpt-4o" />
+                          </div>
+                          <div className="col-span-4 flex items-center gap-2">
+                            <span className="text-xs font-medium text-gray-500 w-10 shrink-0">服务商</span>
+                            <SettingSelect value={model.api_provider} onChange={(e: any) => updateModel(idx, 'api_provider', e.target.value)}>
+                              {config.api_providers?.map((p: any) => <option key={p.name} value={p.name}>{p.name}</option>)}
+                            </SettingSelect>
+                          </div>
+                          <div className="col-span-3 flex items-center gap-2 pr-8">
+                            <span className="text-xs font-medium text-gray-500 shrink-0">MaxCtx</span>
+                            <SettingInput value={model.max_context || ''} onChange={(e: any) => updateModel(idx, 'max_context', e.target.value)} placeholder="128k" />
+                          </div>
+                        </div>
+                        <button onClick={() => removeModel(idx)} className="absolute right-4 p-1.5 text-gray-400 hover:text-red-500 rounded hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors">
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                      
+                      {expandedModel === idx && (
+                        <div className="px-12 py-4 bg-gray-50/50 dark:bg-[#1a1a1a] border-t border-gray-100 dark:border-gray-800/60 space-y-4">
+                          <div className="grid grid-cols-3 gap-4">
+                            <div className="flex flex-col gap-1">
+                              <label className="text-[11px] font-medium text-gray-500">输入价 ($/M)</label>
+                              <SettingInput value={model.price_in ?? ''} onChange={(e: any) => updateModel(idx, 'price_in', e.target.value)} placeholder="0.0" />
+                            </div>
+                            <div className="flex flex-col gap-1">
+                              <label className="text-[11px] font-medium text-gray-500">输出价 ($/M)</label>
+                              <SettingInput value={model.price_out ?? ''} onChange={(e: any) => updateModel(idx, 'price_out', e.target.value)} placeholder="0.0" />
+                            </div>
+                            <div className="flex flex-col gap-1">
+                              <label className="text-[11px] font-medium text-gray-500">缓存输入价</label>
+                              <SettingInput value={model.cache_hit_price_in ?? ''} onChange={(e: any) => updateModel(idx, 'cache_hit_price_in', e.target.value)} placeholder="默认" />
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center gap-6">
+                            <label className="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-300">
+                              <ToggleSwitch checked={model.force_stream_mode === true} onChange={(val) => updateModel(idx, 'force_stream_mode', val)} />
+                              强制流式
+                            </label>
+                            <label className="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-300">
+                              <ToggleSwitch checked={model.tool_call_compat === true} onChange={(val) => updateModel(idx, 'tool_call_compat', val)} />
+                              工具兼容
+                            </label>
+                            <label className="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-300">
+                              <ToggleSwitch checked={model.anti_truncation === true} onChange={(val) => updateModel(idx, 'anti_truncation', val)} />
+                              防截断
+                            </label>
+                          </div>
+                          
+                          <div className="flex flex-col gap-1">
+                            <label className="text-[11px] font-medium text-gray-500">Extra Params (JSON)</label>
+                            <textarea
+                              value={modelExtraParamsText[idx] ?? JSON.stringify(model.extra_params ?? {}, null, 2)}
+                              onChange={(e) => updateModelExtraParamsText(idx, e.target.value)}
+                              rows={3}
+                              className={`w-full px-3 py-2 border rounded-md text-xs font-mono bg-transparent outline-none focus:ring-1 ${
+                                hasInvalidExtraParams(idx)
+                                  ? 'border-red-300 dark:border-red-700 focus:ring-red-500'
+                                  : 'border-gray-200 dark:border-gray-700 focus:ring-blue-500'
+                              }`}
+                              placeholder='{"reasoning_effort":"high"}'
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
+                  ))}
+                </Section>
+
+                <Section title="角色绑定 (Role Assignments)">
+                  {['main', 'coder', 'researcher', 'reviewer', 'title'].map((role, idx) => (
+                    <SettingRow key={role} label={<span className="uppercase text-xs font-semibold">{role}</span>} border={idx !== 4}>
+                      <SettingSelect value={config?.roles?.[role] || ''} onChange={(e: any) => updateNestedConfig(['roles', role], e.target.value)}>
+                        <option value="">-- 跟随 main --</option>
+                        {config?.models?.map((m: any) => {
+                          const name = `${m.api_provider}/${m.model_id}`;
+                          return <option key={name} value={name}>{name}</option>;
+                        })}
+                      </SettingSelect>
+                    </SettingRow>
+                  ))}
+                </Section>
+
+                <Section title="Coder Model Profile">
+                  <div className="flex justify-end mb-2">
+                    <button onClick={addModelProfile} className="flex items-center gap-1 text-xs font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white bg-white dark:bg-[#1e1e1e] border border-gray-200 dark:border-gray-800 px-3 py-1.5 rounded-full shadow-sm transition-colors">
+                      <Plus size={14} /> 添加 Profile
+                    </button>
+                  </div>
+                  {(!config?.model_profiles || config.model_profiles.length === 0) ? (
+                    <div className="p-4 text-center text-sm text-gray-500 dark:text-gray-400">暂无 Coder Profile，请添加或从 OOBE 生成</div>
+                  ) : (
+                    config.model_profiles.map((profile: any, idx: number) => (
+                      <div key={idx} className="border-b border-gray-100 dark:border-gray-800/60 last:border-0 p-4 space-y-3 relative group">
+                        <button onClick={() => removeModelProfile(idx)} className="absolute top-4 right-4 p-1.5 text-gray-400 hover:text-red-500 rounded transition-colors opacity-0 group-hover:opacity-100" title="删除 Profile">
+                          <Trash2 size={16} />
+                        </button>
+                        <div className="grid grid-cols-2 gap-4 pr-8">
+                          <div className="flex flex-col gap-1">
+                            <label className="text-xs font-medium text-gray-600 dark:text-gray-400">Profile 名称</label>
+                            <SettingInput value={profile.profile_name || ''} onChange={(e: any) => updateModelProfile(idx, 'profile_name', e.target.value)} placeholder="如: claude-architect" />
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <label className="text-xs font-medium text-gray-600 dark:text-gray-400">模型</label>
+                            <SettingSelect value={profile.model_name || ''} onChange={(e: any) => updateModelProfile(idx, 'model_name', e.target.value)}>
+                              <option value="">-- 跟随 coder 角色 --</option>
+                              {config?.models?.map((m: any) => {
+                                const name = `${m.api_provider}/${m.model_id}`;
+                                return <option key={name} value={name}>{name}</option>;
+                              })}
+                            </SettingSelect>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4 pr-8">
+                          <div className="flex flex-col gap-1">
+                            <label className="text-xs font-medium text-gray-600 dark:text-gray-400">标签 (逗号分隔)</label>
+                            <SettingInput value={(profile.tags || []).join(', ')} onChange={(e: any) => updateModelProfile(idx, 'tags', e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean))} placeholder="如: 后端, 复杂逻辑" />
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <label className="text-xs font-medium text-gray-600 dark:text-gray-400">适用场景描述</label>
+                            <SettingInput value={profile.description || ''} onChange={(e: any) => updateModelProfile(idx, 'description', e.target.value)} placeholder="如: 适合复杂后端架构" />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4 pr-8">
+                          <div className="flex items-center gap-3">
+                            <label className="text-xs font-medium text-gray-600 dark:text-gray-400 shrink-0">Temperature</label>
+                            <input type="range" min="0" max="2" step="0.05" value={String(profile.temperature ?? 0.5)} onChange={(e) => updateModelProfile(idx, 'temperature', parseFloat(e.target.value))} className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-600" />
+                            <span className="w-10 text-right text-sm font-mono text-gray-900 dark:text-gray-100">{profile.temperature ?? 0.5}</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <label className="text-xs font-medium text-gray-600 dark:text-gray-400 shrink-0">Max Tokens</label>
+                            <SettingInput type="number" value={String(profile.max_tokens ?? 16384)} onChange={(e: any) => updateModelProfile(idx, 'max_tokens', parseInt(e.target.value) || 16384)} className="font-mono text-right" />
+                          </div>
+                        </div>
+                      </div>
+                    ))
                   )}
+                </Section>
+              </div>
+            )}
+
+            {activeTab === 'mcp' && (
+              <div className="animate-in fade-in duration-300">
+                <div className="mb-6 flex justify-end">
+                  <button onClick={() => setConfig((prev: any) => ({ ...prev, mcp_servers: [...(prev.mcp_servers || []), { name: 'new-server', command: 'npx', args: ['-y', 'mcp-server'], enabled: true }] }))} className="flex items-center gap-1 text-xs font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white bg-white dark:bg-[#1e1e1e] border border-gray-200 dark:border-gray-800 px-3 py-1.5 rounded-full shadow-sm transition-colors">
+                    <Plus size={14} /> 添加端点
+                  </button>
                 </div>
+
+                <Section title="已配置的端点">
+                  {(!config?.mcp_servers || config.mcp_servers.length === 0) ? (
+                    <div className="p-8 text-center text-sm text-gray-500 dark:text-gray-400">
+                      暂未配置任何 MCP 服务器。
+                    </div>
+                  ) : (
+                    config.mcp_servers.map((server: any, idx: number) => (
+                      <div key={idx} className={`border-b border-gray-100 dark:border-gray-800/60 last:border-0 relative p-4 transition-all flex flex-col gap-3 group ${server.enabled === false ? 'opacity-60 grayscale' : ''}`}>
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="flex items-center gap-3 flex-1">
+                            <ToggleSwitch checked={server.enabled !== false} onChange={(val) => updateMcpServer(idx, 'enabled', val)} />
+                            <input type="text" value={server.name} onChange={(e) => updateMcpServer(idx, 'name', e.target.value)} className="text-sm font-semibold bg-transparent outline-none focus:border-b border-gray-300 dark:border-gray-600 w-1/2 text-gray-900 dark:text-white" placeholder="服务器名称" />
+                          </div>
+                          <button onClick={() => setConfig((prev: any) => { const newConfig = { ...prev }; newConfig.mcp_servers.splice(idx, 1); return newConfig; })} className="p-1.5 text-gray-400 hover:text-red-500 rounded transition-colors hover:bg-red-50 dark:hover:bg-red-900/20 opacity-0 group-hover:opacity-100">
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                        <div className="flex gap-3 pl-12 pr-6">
+                          <div className="w-1/4">
+                            <label className="block text-[11px] font-medium text-gray-500 mb-1">命令 (Command)</label>
+                            <SettingInput value={server.command} onChange={(e: any) => updateMcpServer(idx, 'command', e.target.value)} placeholder="e.g. npx" />
+                          </div>
+                          <div className="flex-1">
+                            <label className="block text-[11px] font-medium text-gray-500 mb-1">参数 (Args - 空格分隔)</label>
+                            <SettingInput value={Array.isArray(server.args) ? server.args.join(' ') : server.args} onChange={(e: any) => { const arr = e.target.value.split(' ').filter(Boolean); updateMcpServer(idx, 'args', arr); }} placeholder="-y @modelcontextprotocol/server" className="font-mono" />
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </Section>
               </div>
             )}
 
             {activeTab === 'advanced' && (
-              <div className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">高级设置</h2>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">微调模型全局推理参数。</p>
-                </div>
+              <div className="animate-in fade-in duration-300">
 
-                <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5 shadow-sm space-y-5">
-                  <div className="flex items-center gap-6">
-                    <div className="flex-1">
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">全局 Temperature</label>
-                      <p className="text-[11px] text-gray-500">控制回答的随机性和创造性 (建议 0.0 - 0.5)</p>
-                    </div>
-                    <div className="flex items-center gap-3 w-64">
+                <Section title="全局参数">
+                  <SettingRow label="全局 Temperature" description="控制回答的随机性和创造性 (0.0 - 0.5)" border={true}>
+                    <div className="flex items-center gap-3 w-full">
                       <input type="range" min="0" max="2" step="0.1" value={String(config?.model_profiles?.[0]?.temperature || 0.5)} onChange={(e) => updateNestedConfig(['model_profiles', '0', 'temperature'], parseFloat(e.target.value))} className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-600" />
-                      <span className="w-10 text-right text-sm font-mono font-medium text-blue-600 dark:text-blue-400">
+                      <span className="w-10 text-right text-sm font-mono text-gray-900 dark:text-gray-100">
                         {config?.model_profiles?.[0]?.temperature || 0.5}
                       </span>
                     </div>
-                  </div>
-                  
-                  <div className="w-full h-px bg-gray-100 dark:bg-gray-800" />
+                  </SettingRow>
+                  <SettingRow label="全局 Max Tokens" description="单次回复生成的最大 Token 数量" border={false}>
+                    <SettingInput type="number" value={String(config?.model_profiles?.[0]?.max_tokens || 16384)} onChange={(e: any) => updateNestedConfig(['model_profiles', '0', 'max_tokens'], parseInt(e.target.value))} className="font-mono text-right" />
+                  </SettingRow>
+                </Section>
 
-                  <div className="flex items-center gap-6">
-                    <div className="flex-1">
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">全局 Max Tokens</label>
-                      <p className="text-[11px] text-gray-500">单次回复生成的最大 Token 数量</p>
-                    </div>
-                    <div className="w-64">
-                      <input type="number" value={String(config?.model_profiles?.[0]?.max_tokens || 16384)} onChange={(e) => updateNestedConfig(['model_profiles', '0', 'max_tokens'], parseInt(e.target.value))} className="w-full px-3 py-1.5 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-950 text-sm focus:ring-1 focus:ring-blue-500 outline-none font-mono" />
-                    </div>
-                  </div>
-
-                  <div className="w-full h-px bg-gray-100 dark:bg-gray-800" />
-
-                  {/* Coding Agent 设置 */}
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">Coding Agent 设置</h3>
-                    <p className="text-[11px] text-gray-500 mb-4">配置内置编码助手插件的行为参数。</p>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-gray-700 dark:text-gray-300">用户称呼</label>
-                        <input type="text" value={config?.coding_agent?.tui_username || 'User'} onChange={(e) => updateCodingAgent('tui_username', e.target.value)} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm bg-gray-50 dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="User" />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-gray-700 dark:text-gray-300">首选终端环境</label>
-                        <select value={config?.coding_agent?.preferred_terminal || ''} onChange={(e) => updateCodingAgent('preferred_terminal', e.target.value)} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm bg-gray-50 dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none">
-                          <option value="">自动检测</option>
-                          <option value="powershell">PowerShell 5</option>
-                          <option value="pwsh">PowerShell 7</option>
-                          <option value="cmd">CMD</option>
-                          <option value="bash">Bash</option>
-                        </select>
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-gray-700 dark:text-gray-300">最大并行研究员数</label>
-                        <input type="number" min={1} max={20} value={config?.coding_agent?.max_parallel_researchers || 6} onChange={(e) => updateCodingAgent('max_parallel_researchers', parseInt(e.target.value) || 6)} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm bg-gray-50 dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none" />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-gray-700 dark:text-gray-300">缓存有效期（小时）</label>
-                        <input type="number" min={1} max={720} value={config?.coding_agent?.cache_ttl_hours || 24} onChange={(e) => updateCodingAgent('cache_ttl_hours', parseInt(e.target.value) || 24)} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm bg-gray-50 dark:bg-gray-950 focus:ring-1 focus:ring-blue-500 outline-none" />
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <Section title="Coding Agent">
+                  <SettingRow label="用户称呼" border={true}>
+                    <SettingInput value={config?.coding_agent?.tui_username || 'User'} onChange={(e: any) => updateCodingAgent('tui_username', e.target.value)} placeholder="User" className="text-right" />
+                  </SettingRow>
+                  <SettingRow label="首选终端环境" border={true}>
+                    <SettingSelect value={config?.coding_agent?.preferred_terminal || ''} onChange={(e: any) => updateCodingAgent('preferred_terminal', e.target.value)}>
+                      <option value="">自动检测</option>
+                      <option value="powershell">PowerShell 5</option>
+                      <option value="pwsh">PowerShell 7</option>
+                      <option value="cmd">CMD</option>
+                      <option value="bash">Bash</option>
+                    </SettingSelect>
+                  </SettingRow>
+                  <SettingRow label="最大并行研究员数" border={true}>
+                    <SettingInput type="number" min={1} max={20} value={config?.coding_agent?.max_parallel_researchers || 6} onChange={(e: any) => updateCodingAgent('max_parallel_researchers', parseInt(e.target.value) || 6)} className="text-right font-mono" />
+                  </SettingRow>
+                  <SettingRow label="缓存有效期" description="小时" border={false}>
+                    <SettingInput type="number" min={1} max={720} value={config?.coding_agent?.cache_ttl_hours || 24} onChange={(e: any) => updateCodingAgent('cache_ttl_hours', parseInt(e.target.value) || 24)} className="text-right font-mono" />
+                  </SettingRow>
+                </Section>
               </div>
             )}
 
             {activeTab === 'about' && (
-              <div className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">关于 MoFox Code</h2>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">版本信息与组件清单</p>
-                </div>
-                <div className="bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden">
-                  <table className="w-full text-sm">
-                    <tbody>
-                      {[
-                        { label: 'MoFox Code Desktop', key: 'desktop' },
-                        { label: 'Neo-MoFox 框架', key: 'framework' },
-                        { label: 'coding_agent 插件', key: 'coding_agent' },
-                        { label: 'coding_agent_webui 插件', key: 'coding_agent_webui' },
-                      ].map(({ label, key }) => (
-                        <tr key={key} className="border-b border-gray-200 dark:border-gray-800 last:border-b-0">
-                          <td className="px-4 py-3 text-gray-700 dark:text-gray-300 font-medium">{label}</td>
-                          <td className="px-4 py-3 text-gray-500 dark:text-gray-400 font-mono text-xs">
-                            {version?.[key] ?? <RefreshCw className="animate-spin inline w-3 h-3" />}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+              <div className="animate-in fade-in duration-300">
+                
+                <Section title="系统信息">
+                  {[
+                    { label: 'MoFox Code Desktop', key: 'desktop' },
+                    { label: 'Neo-MoFox 框架', key: 'framework' },
+                    { label: 'coding_agent 插件', key: 'coding_agent' },
+                    { label: 'coding_agent_webui 插件', key: 'coding_agent_webui' },
+                  ].map(({ label, key }, idx) => (
+                    <SettingRow key={key} label={label} border={idx !== 3}>
+                      <span className="text-xs font-mono text-gray-500 dark:text-gray-400">
+                        {version?.[key] ?? <RefreshCw className="animate-spin inline w-3 h-3" />}
+                      </span>
+                    </SettingRow>
+                  ))}
+                </Section>
               </div>
             )}
 
@@ -712,13 +842,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ port, onClose }) => {
         </div>
 
         {/* 底部保存条 */}
-        <div className="p-4 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 flex items-center justify-end gap-3 shrink-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.02)] z-10">
-          {error && <span className="text-red-500 text-sm font-medium flex items-center mr-auto px-2">{error}</span>}
-          {saveSuccess && <span className="text-green-600 dark:text-green-400 text-sm font-medium flex items-center mr-auto px-2 animate-in fade-in zoom-in duration-200">✓ 配置已保存，部分修改需重启生效</span>}
-          <button onClick={onClose} className="px-5 py-2 rounded-lg text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+        <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-800/60 bg-[#f9fafb]/80 dark:bg-[#111111]/80 backdrop-blur-md flex items-center justify-end gap-3 shrink-0 z-10 absolute bottom-0 left-0 right-0">
+          {error && <span className="text-red-500 text-sm font-medium flex items-center mr-auto">{error}</span>}
+          {saveSuccess && <span className="text-green-600 dark:text-green-400 text-sm font-medium flex items-center mr-auto animate-in fade-in zoom-in duration-200">✓ 配置已保存，正在重启...</span>}
+          <button onClick={onClose} className="px-5 py-2 rounded-md text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors">
             取消
           </button>
-          <button onClick={handleSave} disabled={saving || saveSuccess} className="px-5 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 shadow-sm shadow-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all">
+          <button onClick={handleSave} disabled={saving || saveSuccess} className="px-5 py-2 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all">
             {saving ? '保存中...' : saveSuccess ? '已保存' : '保存更改并重启'}
           </button>
         </div>
