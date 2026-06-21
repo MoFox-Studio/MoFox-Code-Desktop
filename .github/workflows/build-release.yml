@@ -69,6 +69,7 @@ jobs:
       - name: Install WebUI frontend deps
         run: |
           cd plugins/coding_agent_webui/frontend
+          rm -r -force node_modules 2>$null
           npm install
 
       - name: Build WebUI frontend
@@ -79,6 +80,7 @@ jobs:
       - name: Install Tauri shell frontend deps
         run: |
           cd desktop/frontend
+          rm -r -force node_modules 2>$null
           npm install
 
       # ── PyInstaller backend ─────────────────────────
